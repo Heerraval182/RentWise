@@ -3,9 +3,9 @@ import { createRoot } from "react-dom/client";
 import {
   ArrowRight, ArrowLeft, Check, FileText, Home, Search, ShieldCheck,
   UploadCloud, Sparkles, Clock3, AlertTriangle, Wrench, DoorOpen,
-  CircleDollarSign, Lightbulb, Lock, X, LoaderCircle
+  CircleDollarSign, Lightbulb, Lock, X, LoaderCircle, MessageCircle, Send, Gauge
 } from "lucide-react";
-import { uploadAgreement } from "./services/api";
+import { askAgreement, uploadAgreement } from "./services/api";
 import "./styles.css";
 
 const categories = [
@@ -15,6 +15,12 @@ const categories = [
   ["Termination", DoorOpen],
   ["Penalty", AlertTriangle],
   ["Utilities", Lightbulb],
+];
+
+const roadmapFeatures = [
+  [Sparkles, "AI Clause Explanations", "Understand difficult legal language in simple words."],
+  [Check, "Smart Tenant Checklist", "Know what you should verify before signing."],
+  [Search, "Agreement Comparison", "Compare two rental agreements side by side."],
 ];
 
 function App() {
@@ -114,11 +120,7 @@ function HomePage({ onStart }) {
 
         <section className="future">
           <div><span className="section-label">BUILT FOR WHAT'S NEXT</span><h2>A simple first step toward smarter agreements.</h2></div>
-          <div className="future-grid">
-            <Future icon={Sparkles} title="AI Clause Explanations" text="Understand difficult legal language in simple words." />
-            <Future icon={Check} title="Smart Tenant Checklist" text="Know what you should verify before signing." />
-            <Future icon={Search} title="Agreement Comparison" text="Compare two rental agreements side by side." />
-          </div>
+          <RoadmapFeatures />
         </section>
       </main>
       <Footer />
@@ -228,13 +230,16 @@ function ResultsPage({ result, onBack, onHome }) {
         <section className="clauses"><div className="section-heading"><span>EXPLORE AGREEMENT CLAUSES</span><h2>Find details by category.</h2></div>
           <div className="category-tabs">{categories.map(([name,Icon])=><button className={active===name?"active":""} onClick={()=>setActive(name)} key={name}><Icon size={17}/>{name}</button>)}</div>
           <div className="clause-panel"><div className="clause-label"><span>{active.toUpperCase()}</span><b>{clause?.clauses?.length || 0} detected</b></div>
-            {clause?.clauses?.length ? clause.clauses.map((text,i)=><div className="clause" key={i}><p>“{text}”</p><small>Detected from document text</small></div>) : <div className="empty-clause">No matching clause was found for this category.</div>}
+            {clause?.clauses?.length ? clause.clauses.map((item,i)=><div className="clause" key={i}><div className="clause-meta"><span className={`risk-dot ${item.risk.toLowerCase()}`}></span><b>{item.risk} risk</b></div><p>“{item.text}”</p><small>{item.reason}</small></div>) : <div className="empty-clause">No matching clause was found for this category.</div>}
           </div>
         </section>
 
+        <RiskSection risks={result?.risks || []} fairness={result?.fairness} />
+        <ChatPanel documentId={result?.document_id} />
+
         <section className="summary"><div className="summary-icon"><Sparkles size={20}/></div><div><span className="section-label">BASIC AGREEMENT SUMMARY</span><h2>What RentWise found</h2><p>{result?.summary}</p><small>This is a rule-based summary for the current project phase, not advanced AI-generated legal advice.</small></div></section>
 
-        <section className="coming"><div className="section-heading"><span>COMING NEXT</span><h2>More clarity is on the roadmap.</h2></div><div className="future-grid"><Future icon={Sparkles} title="AI Clause Explanations" text="Understand difficult legal language in simple words."/><Future icon={Check} title="Smart Tenant Checklist" text="Know what you should verify before signing."/><Future icon={Search} title="Agreement Comparison" text="Compare two rental agreements side by side."/></div></section>
+        <section className="coming"><div className="section-heading"><span>COMING NEXT</span><h2>More clarity is on the roadmap.</h2></div><RoadmapFeatures /></section>
       </main>
       <Footer />
     </>
@@ -242,9 +247,21 @@ function ResultsPage({ result, onBack, onHome }) {
 }
 
 function InfoCard({icon:Icon,label,value,sub}) { return <div className="info-card"><div className="info-icon"><Icon size={18}/></div><span>{label}</span><strong>{value || "Not Found"}</strong>{sub && <small>{sub}</small>}</div> }
+function RiskSection({ risks, fairness }) {
+  return <section className="risk-section"><div className="score-card"><div className="score-heading"><div className="score-icon"><Gauge size={20}/></div><div><span className="section-label">FAIRNESS SCORE</span><h2>{fairness?.score ?? 0}<small>/100</small></h2><p>{fairness?.label || "Needs review"}</p></div></div><div className="score-bar"><span style={{width: `${fairness?.score ?? 0}%`}} /></div><div className="factor-list">{(fairness?.factors || []).map(factor => <div className="factor" key={factor.name}><span>{factor.name}</span><b className={factor.status === "Found" ? "found" : "missing"}>{factor.status}</b></div>)}</div></div><div className="risk-card"><div className="risk-heading"><AlertTriangle size={19}/><div><span className="section-label">RISK DETECTION</span><h2>{risks.length ? `${risks.length} clause${risks.length === 1 ? "" : "s"} to review` : "No elevated risks found"}</h2></div></div>{risks.length ? risks.slice(0,4).map((risk,i)=><div className="risk-item" key={i}><span className={`risk-dot ${risk.level.toLowerCase()}`}></span><div><b>{risk.level} risk</b><p>{risk.reason}</p><small>“{risk.clause}”</small></div></div>) : <p className="clear-risk">The rule-based review did not detect a high or medium risk signal.</p>}</div></section>;
+}
+function ChatPanel({ documentId }) {
+  const [question, setQuestion] = useState("");
+  const [answer, setAnswer] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  async function ask(e) { e.preventDefault(); if (!question.trim()) return; setBusy(true); setError(""); try { setAnswer(await askAgreement(documentId, question)); } catch (err) { setError(err.message); } finally { setBusy(false); } }
+  return <section className="chat-panel"><div className="chat-title"><div className="chat-icon"><MessageCircle size={20}/></div><div><span className="section-label">ASK YOUR AGREEMENT</span><h2>Have a question?</h2><p>Answers are limited to the uploaded document.</p></div></div><form onSubmit={ask} className="chat-form"><input value={question} onChange={e=>setQuestion(e.target.value)} placeholder="e.g. Who is responsible for repairs?" aria-label="Ask a question about the agreement"/><button className="primary-btn compact" disabled={busy}>{busy ? "Thinking..." : "Ask"} <Send size={16}/></button></form>{error && <p className="chat-error">{error}</p>}{answer && <div className="chat-answer"><b>RentWise found:</b><p>{answer.answer}</p>{answer.sources?.length > 0 && <small>Source text is quoted from your uploaded agreement.</small>}</div>}</section>;
+}
 function ResultPill({text}) { return <div className="result-pill"><Check size={13}/>{text}</div> }
 function Value({icon:Icon,title,text}) { return <div className="value"><span><Icon size={19}/></span><div><b>{title}</b><small>{text}</small></div></div> }
 function Step({n,title,text,icon:Icon}) { return <div className="step"><span className="step-num">{n}</span><div className="step-icon"><Icon size={22}/></div><h3>{title}</h3><p>{text}</p></div> }
+function RoadmapFeatures() { return <div className="future-grid">{roadmapFeatures.map(([icon, title, text]) => <Future key={title} icon={icon} title={title} text={text} />)}</div> }
 function Future({icon:Icon,title,text}) { return <div className="future-card"><div className="future-icon"><Icon size={19}/></div><div><h3>{title}<span>COMING SOON</span></h3><p>{text}</p></div><Lock size={16}/></div> }
 function Process({text,done,active}) { return <div className={"process " + (done?"done ":"")+(active?"active":"")}><span>{done?<Check size={13}/>:active?<LoaderCircle size={13}/>:null}</span>{text}</div> }
 function Footer(){return <footer><div className="footer-brand"><span className="brand-mark"><FileText size={17}/><Check size={11}/></span><b>RentWise</b></div><span>General information only — not professional legal advice.</span></footer>}

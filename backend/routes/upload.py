@@ -1,6 +1,10 @@
+from uuid import uuid4
+
 from fastapi import APIRouter, UploadFile, File, HTTPException
+from pydantic import BaseModel, Field
 from services.document_parser import extract_text
-from services.analyzer import analyze_document
+from services.document_store import get_document, save_document
+from services.analyzer import analyze_document, answer_question
 
 router = APIRouter()
 
@@ -37,6 +41,24 @@ async def upload_document(file: UploadFile = File(...)):
         )
 
     result = analyze_document(text)
+    document_id = str(uuid4())
+    save_document(document_id, text)
     result["filename"] = filename
     result["scanned"] = scanned
+    result["document_id"] = document_id
     return result
+
+
+class Question(BaseModel):
+    document_id: str = Field(min_length=1, max_length=100)
+    question: str = Field(min_length=1, max_length=1000)
+
+
+@router.post("/ask")
+async def ask_question(payload: Question):
+    text = get_document(payload.document_id)
+    if not text:
+        raise HTTPException(status_code=404, detail="That document session has expired. Please upload the agreement again.")
+    if not payload.question.strip():
+        raise HTTPException(status_code=400, detail="Please enter a question about the uploaded agreement.")
+    return answer_question(text, payload.question)

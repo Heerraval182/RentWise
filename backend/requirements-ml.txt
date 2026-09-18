@@ -1,0 +1,4 @@
+# Optional dependencies for Phase 2 Legal-BERT training and inference.
+torch>=2.2
+transformers>=4.45
+accelerate>=0.34

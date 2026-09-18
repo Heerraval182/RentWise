@@ -1,5 +1,7 @@
 import re
 
+from services.classifier import CATEGORIES, predict_category
+
 def first_match(text, patterns, default="Not Found"):
     for pattern in patterns:
         match = re.search(pattern, text, re.I | re.M)
@@ -38,7 +40,9 @@ def analyze_document(text):
     )
     penalty = "Found" if re.search(r"penalty|late fee|late payment|fine", normalized, re.I) else "Not Found"
 
-    categories = categorize(normalized)
+    categories = categorize(text)
+    risks = detect_risks(normalized)
+    fairness = calculate_fairness(normalized, risks)
     summary = build_summary(rent, deposit, notice, duration)
 
     return {
@@ -52,6 +56,8 @@ def analyze_document(text):
             "penalty": penalty,
         },
         "clauses": categories,
+        "risks": risks,
+        "fairness": fairness,
         "summary": summary,
     }
 
@@ -65,20 +71,116 @@ def categorize(text):
         "Utilities": ["electricity", "water", "utility", "utilities", "gas"],
     }
 
-    sentences = re.split(r"(?<=[.!?])\s+|\n+", text)
+    sentences = split_clauses(text)
+    matches_by_category = {category: [] for category in CATEGORIES}
+    for sentence in sentences:
+        category = predict_category(sentence)
+        if category:
+            matches_by_category[category].append(sentence)
+            continue
+        lowered = sentence.lower()
+        for category, keywords in keyword_map.items():
+            if any(keyword in lowered for keyword in keywords):
+                matches_by_category[category].append(sentence)
+
     output = []
-    for category, keywords in keyword_map.items():
+    for category in CATEGORIES:
         matches = []
-        for sentence in sentences:
-            if any(k in sentence.lower() for k in keywords):
-                s = sentence.strip()
-                if s and s not in matches:
-                    matches.append(s)
+        for sentence in matches_by_category[category]:
+            if sentence not in matches:
+                matches.append(sentence)
         output.append({
             "category": category,
-            "clauses": matches[:5],
+            "clauses": [classify_clause(s, category) for s in matches[:5]],
         })
     return output
+
+
+def split_clauses(text):
+    return [part.strip() for part in re.split(r"(?<=[.!?])\s+|\n+", text) if part.strip()]
+
+
+def classify_clause(clause, category):
+    risk = assess_clause_risk(clause)
+    return {
+        "text": clause,
+        "risk": risk["level"],
+        "reason": risk["reason"],
+    }
+
+
+def assess_clause_risk(clause):
+    lowered = clause.lower()
+    high_patterns = [
+        (r"(no|non[- ]?)refundable|deposit.*(?:forfeit|forfeiture)", "The deposit may be kept without a clear refund path."),
+        (r"lock(?:out| you out)|change the locks|evict.*without", "It appears to allow removal without a clear legal process."),
+        (r"any amount.*penalty|penalty.*(?:unlimited|any amount)", "The penalty amount is not clearly limited."),
+    ]
+    for pattern, reason in high_patterns:
+        if re.search(pattern, lowered):
+            return {"level": "High", "reason": reason}
+
+    medium_patterns = [
+        (r"penalty|late fee|fine|late payment", "A financial penalty is mentioned; confirm the amount and trigger."),
+        (r"lock[- ]?in|minimum stay", "A lock-in may make it difficult to leave early."),
+        (r"(?:tenant|lessee).{0,100}(?:all )?(?:repair|maintenance)|all (?:repair|maintenance).{0,100}(?:tenant|lessee)", "The tenant may carry broad repair or maintenance responsibility."),
+        (r"notice.{0,20}(?:60|90|120)\s*days|notice.{0,20}(?:4|5|6|12)\s*months", "The notice period is longer than a typical short notice period."),
+    ]
+    for pattern, reason in medium_patterns:
+        if re.search(pattern, lowered):
+            return {"level": "Medium", "reason": reason}
+    return {"level": "Low", "reason": "No specific risk signal was detected in this clause."}
+
+
+def detect_risks(text):
+    risks = []
+    for clause in split_clauses(text):
+        assessed = assess_clause_risk(clause)
+        if assessed["level"] != "Low":
+            risks.append({"clause": clause, **assessed})
+    return risks[:12]
+
+
+def calculate_fairness(text, risks):
+    deductions = {"High": 18, "Medium": 8, "Low": 2}
+    score = max(0, 100 - sum(deductions[risk["level"]] for risk in risks))
+    factors = []
+    factor_rules = [
+        ("Penalties", r"penalty|late fee|fine|late payment", "Penalties or late fees are present."),
+        ("Notice", r"notice", "A notice requirement is specified."),
+        ("Lock-in", r"lock[- ]?in|minimum stay", "A lock-in or minimum stay is specified."),
+        ("Refund", r"refund|refundable|forfeit|forfeiture", "Deposit refund or forfeiture language is present."),
+        ("Maintenance", r"maintenance|repair", "Maintenance or repair responsibilities are assigned."),
+    ]
+    for name, pattern, detail in factor_rules:
+        factors.append({"name": name, "status": "Found" if re.search(pattern, text, re.I) else "Not Found", "detail": detail})
+    return {"score": score, "label": score_label(score), "factors": factors}
+
+
+def score_label(score):
+    if score >= 80:
+        return "Generally balanced"
+    if score >= 60:
+        return "Needs review"
+    return "Higher risk"
+
+
+def answer_question(text, question):
+    clauses = split_clauses(text)
+    question_words = set(re.findall(r"[a-z]{3,}", question.lower()))
+    stop_words = {"what", "when", "where", "which", "does", "this", "that", "with", "from", "about", "agreement", "please", "tell"}
+    question_words -= stop_words
+    ranked = []
+    for clause in clauses:
+        words = set(re.findall(r"[a-z]{3,}", clause.lower()))
+        overlap = len(question_words & words)
+        if overlap:
+            ranked.append((overlap, clause))
+    ranked.sort(key=lambda item: item[0], reverse=True)
+    if not ranked:
+        return {"answer": "I could not find that information in the uploaded agreement.", "sources": []}
+    sources = [clause for _, clause in ranked[:3]]
+    return {"answer": "Based on the agreement: " + " ".join(sources), "sources": sources}
 
 def build_summary(rent, deposit, notice, duration):
     parts = []
