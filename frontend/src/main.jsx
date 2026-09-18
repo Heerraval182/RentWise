@@ -5,7 +5,7 @@ import {
   UploadCloud, Sparkles, Clock3, AlertTriangle, Wrench, DoorOpen,
   CircleDollarSign, Lightbulb, Lock, X, LoaderCircle, MessageCircle, Send, Gauge
 } from "lucide-react";
-import { askAgreement, uploadAgreement } from "./services/api";
+import { askAgreement, uploadAgreement, explainClause, getChecklist, compareAgreement } from "./services/api";
 import "./styles.css";
 
 const categories = [
@@ -230,12 +230,14 @@ function ResultsPage({ result, onBack, onHome }) {
         <section className="clauses"><div className="section-heading"><span>EXPLORE AGREEMENT CLAUSES</span><h2>Find details by category.</h2></div>
           <div className="category-tabs">{categories.map(([name,Icon])=><button className={active===name?"active":""} onClick={()=>setActive(name)} key={name}><Icon size={17}/>{name}</button>)}</div>
           <div className="clause-panel"><div className="clause-label"><span>{active.toUpperCase()}</span><b>{clause?.clauses?.length || 0} detected</b></div>
-            {clause?.clauses?.length ? clause.clauses.map((item,i)=><div className="clause" key={i}><div className="clause-meta"><span className={`risk-dot ${item.risk.toLowerCase()}`}></span><b>{item.risk} risk</b></div><p>“{item.text}”</p><small>{item.reason}</small></div>) : <div className="empty-clause">No matching clause was found for this category.</div>}
+            {clause?.clauses?.length ? clause.clauses.map((item,i)=><ClauseItem item={item} category={active} key={i}/>) : <div className="empty-clause">No matching clause was found for this category.</div>}
           </div>
         </section>
 
         <RiskSection risks={result?.risks || []} fairness={result?.fairness} />
         <ChatPanel documentId={result?.document_id} />
+        <ChecklistPanel documentId={result?.document_id} />
+        <ComparePanel documentId={result?.document_id} />
 
         <section className="summary"><div className="summary-icon"><Sparkles size={20}/></div><div><span className="section-label">BASIC AGREEMENT SUMMARY</span><h2>What RentWise found</h2><p>{result?.summary}</p><small>This is a rule-based summary for the current project phase, not advanced AI-generated legal advice.</small></div></section>
 
@@ -257,6 +259,25 @@ function ChatPanel({ documentId }) {
   const [error, setError] = useState("");
   async function ask(e) { e.preventDefault(); if (!question.trim()) return; setBusy(true); setError(""); try { setAnswer(await askAgreement(documentId, question)); } catch (err) { setError(err.message); } finally { setBusy(false); } }
   return <section className="chat-panel"><div className="chat-title"><div className="chat-icon"><MessageCircle size={20}/></div><div><span className="section-label">ASK YOUR AGREEMENT</span><h2>Have a question?</h2><p>Answers are limited to the uploaded document.</p></div></div><form onSubmit={ask} className="chat-form"><input value={question} onChange={e=>setQuestion(e.target.value)} placeholder="e.g. Who is responsible for repairs?" aria-label="Ask a question about the agreement"/><button className="primary-btn compact" disabled={busy}>{busy ? "Thinking..." : "Ask"} <Send size={16}/></button></form>{error && <p className="chat-error">{error}</p>}{answer && <div className="chat-answer"><b>RentWise found:</b><p>{answer.answer}</p>{answer.sources?.length > 0 && <small>Source text is quoted from your uploaded agreement.</small>}</div>}</section>;
+}
+function ClauseItem({ item, category }) {
+  const [explanation, setExplanation] = useState(null);
+  const [busy, setBusy] = useState(false);
+  async function explain() { setBusy(true); try { setExplanation(await explainClause(item.text, category)); } finally { setBusy(false); } }
+  return <div className="clause"><div className="clause-meta"><span className={`risk-dot ${item.risk.toLowerCase()}`}></span><b>{item.risk} risk</b></div><p>“{item.text}”</p><small>{item.reason}</small><button className="explain-btn" onClick={explain} disabled={busy}><Sparkles size={13}/>{busy ? "Explaining..." : "Explain simply"}</button>{explanation && <div className="explanation"><b>In simple words</b><p>{explanation.plain_language}</p><small>Questions to ask: {explanation.questions_to_ask.join(" ")}</small></div>}</div>;
+}
+function ChecklistPanel({ documentId }) {
+  const [items, setItems] = useState(null);
+  const [busy, setBusy] = useState(false);
+  async function load() { setBusy(true); try { setItems((await getChecklist(documentId)).items); } finally { setBusy(false); } }
+  return <section className="tool-panel"><div className="tool-heading"><div className="tool-icon"><Check size={19}/></div><div><span className="section-label">SMART TENANT CHECKLIST</span><h2>Know what to verify before signing.</h2></div><button className="primary-btn compact" onClick={load} disabled={busy}>{busy ? "Building..." : items ? "Refresh" : "Build checklist"}</button></div>{items && <div className="checklist">{items.map(item => <div className="check-item" key={item.text}><span className={item.status === "Found" ? "found" : "check"}>{item.status === "Found" ? <Check size={13}/> : ""}</span><span>{item.text}</span><small>{item.status === "Found" ? "Mentioned" : "Verify"}</small></div>)}</div>}</section>;
+}
+function ComparePanel({ documentId }) {
+  const [comparison, setComparison] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  async function compare(e) { const file = e.target.files?.[0]; if (!file) return; setBusy(true); setError(""); try { setComparison(await compareAgreement(documentId, file)); } catch (err) { setError(err.message); } finally { setBusy(false); e.target.value = ""; } }
+  return <section className="tool-panel"><div className="tool-heading"><div className="tool-icon"><Search size={19}/></div><div><span className="section-label">AGREEMENT COMPARISON</span><h2>Compare another agreement side by side.</h2></div><label className="browse compact">{busy ? "Comparing..." : "Choose agreement"}<input type="file" accept=".pdf,.docx" onChange={compare} disabled={busy}/></label></div>{error && <p className="chat-error">{error}</p>}{comparison && <div className="comparison"><div className="compare-header"><b>Current agreement</b><b>{comparison.filename || "Second agreement"}</b></div>{comparison.fields.map(field => <div className="compare-row" key={field.label}><span>{field.label}</span><b>{field.first}</b><b className={field.match ? "same" : "different"}>{field.second}</b></div>)}<div className="score-compare"><span>Fairness score</span><b>{comparison.first_score}/100</b><b>{comparison.second_score}/100</b></div></div>}</section>;
 }
 function ResultPill({text}) { return <div className="result-pill"><Check size={13}/>{text}</div> }
 function Value({icon:Icon,title,text}) { return <div className="value"><span><Icon size={19}/></span><div><b>{title}</b><small>{text}</small></div></div> }

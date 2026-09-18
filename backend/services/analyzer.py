@@ -182,6 +182,65 @@ def answer_question(text, question):
     sources = [clause for _, clause in ranked[:3]]
     return {"answer": "Based on the agreement: " + " ".join(sources), "sources": sources}
 
+
+def explain_clause(clause, category="Clause"):
+    lowered = clause.lower()
+    explanations = []
+    if re.search(r"rent|monthly", lowered):
+        explanations.append("This section explains how much rent is due and when it must be paid.")
+    if re.search(r"deposit|security", lowered):
+        explanations.append("This section covers money held by the landlord and when it may be returned or kept.")
+    if re.search(r"notice|terminate|vacate", lowered):
+        explanations.append("This section explains how much notice is needed to end the agreement or move out.")
+    if re.search(r"repair|maintenance", lowered):
+        explanations.append("This section assigns responsibility for keeping the property in working condition.")
+    if re.search(r"penalty|late fee|fine", lowered):
+        explanations.append("This section says a charge may apply when a payment or obligation is late or missed.")
+    if re.search(r"electricity|water|utility|gas", lowered):
+        explanations.append("This section explains which utility costs may be paid by the tenant or landlord.")
+    if not explanations:
+        explanations.append(f"This is a {category.lower()} provision. Check who must act, when it applies, and whether any amount or exception is clearly stated.")
+    return {
+        "plain_language": " ".join(explanations),
+        "questions_to_ask": [
+            "What exactly do I need to do?",
+            "When does this apply, and are there exceptions?",
+            "What amount or consequence should I confirm in writing?",
+        ],
+    }
+
+
+def build_checklist(text):
+    checks = [
+        ("Confirm the monthly rent and payment date", r"rent|monthly"),
+        ("Confirm the security deposit, refund timing, and deductions", r"deposit|refund"),
+        ("Check the notice period and move-out process", r"notice|terminate|vacate"),
+        ("Clarify who handles repairs and maintenance", r"repair|maintenance"),
+        ("Review late fees, penalties, and lock-in terms", r"penalty|late fee|fine|lock[- ]?in"),
+        ("Confirm which utilities you will pay", r"electricity|water|utility|gas"),
+    ]
+    return [{"text": label, "status": "Found" if re.search(pattern, text, re.I) else "Check"} for label, pattern in checks]
+
+
+def compare_documents(first_text, second_text):
+    first = analyze_document(first_text)
+    second = analyze_document(second_text)
+    fields = [
+        ("Monthly rent", "monthly_rent"),
+        ("Security deposit", "security_deposit"),
+        ("Notice period", "notice_period"),
+        ("Lock-in period", "lock_in_period"),
+        ("Agreement duration", "agreement_duration"),
+        ("Maintenance", "maintenance"),
+        ("Penalty", "penalty"),
+    ]
+    values = []
+    for label, key in fields:
+        left = first["information"].get(key, "Not Found")
+        right = second["information"].get(key, "Not Found")
+        values.append({"label": label, "first": left, "second": right, "match": left == right})
+    return {"fields": values, "first_score": first["fairness"]["score"], "second_score": second["fairness"]["score"]}
+
 def build_summary(rent, deposit, notice, duration):
     parts = []
     if rent != "Not Found":

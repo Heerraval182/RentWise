@@ -64,6 +64,6 @@ python train_classifier.py --data data/labeled_clauses.example.jsonl
 The default base model is `nlpaueb/legal-bert-base-uncased`. To use the saved classifier during uploads, set `LEGAL_BERT_MODEL_PATH` to the output directory before starting FastAPI. If the model or optional dependencies are unavailable, RentWise automatically uses its explainable rule-based classifier.
 
 ## First-review scope
-Implemented: upload, PDF/DOCX extraction, clause classification into Rent, Deposit, Maintenance, Penalty, Utilities and Termination, per-clause risk levels with explanations, a 0–100 fairness score with factors, document-grounded questions, summary, processing/error states and results dashboard.
+Implemented: upload, PDF/DOCX extraction, clause classification into Rent, Deposit, Maintenance, Penalty, Utilities and Termination, plain-language clause explanations, a smart tenant checklist, side-by-side agreement comparison, per-clause risk levels with explanations, a 0–100 fairness score with factors, document-grounded questions, summary, processing/error states and results dashboard.
 
-The risk engine and fairness score remain deterministic and auditable even when Legal-BERT classification is enabled. Future scope includes multilingual support, agreement comparison, and replacing the extractive chatbot with a hosted or local retrieval-augmented language model.
+The risk engine, fairness score, clause explanations, checklist, and comparison remain deterministic and auditable even when Legal-BERT classification is enabled. Future scope includes multilingual support and replacing the extractive chatbot with a hosted or local retrieval-augmented language model.
