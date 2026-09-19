@@ -1,6 +1,6 @@
 from uuid import uuid4
 
-from fastapi import APIRouter, UploadFile, File, HTTPException
+from fastapi import APIRouter, UploadFile, File, HTTPException, Form
 from pydantic import BaseModel, Field
 from services.document_parser import extract_text
 from services.document_store import get_document, save_document
@@ -12,7 +12,7 @@ ALLOWED = {".pdf", ".docx"}
 MAX_SIZE = 10 * 1024 * 1024
 
 @router.post("/upload")
-async def upload_document(file: UploadFile = File(...)):
+async def upload_document(file: UploadFile = File(...), location: str = Form(default="")):
     filename = file.filename or ""
     extension = "." + filename.lower().split(".")[-1] if "." in filename else ""
 
@@ -40,7 +40,7 @@ async def upload_document(file: UploadFile = File(...)):
             detail="We couldn't find selectable text in this document."
         )
 
-    result = analyze_document(text)
+    result = analyze_document(text, location)
     document_id = str(uuid4())
     save_document(document_id, text)
     result["filename"] = filename

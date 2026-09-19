@@ -1,8 +1,9 @@
 const API_BASE = import.meta.env.VITE_API_BASE || "/api";
 
-export async function uploadAgreement(file) {
+export async function uploadAgreement(file, location = "") {
   const form = new FormData();
   form.append("file", file);
+  if (location.trim()) form.append("location", location.trim());
 
   const response = await fetch(`${API_BASE}/upload`, {
     method: "POST",

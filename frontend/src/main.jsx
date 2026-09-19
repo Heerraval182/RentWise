@@ -130,6 +130,7 @@ function HomePage({ onStart }) {
 
 function AnalyzerPage({ onBack, onResult, error, setError }) {
   const [file, setFile] = useState(null);
+  const [location, setLocation] = useState("");
   const [busy, setBusy] = useState(false);
   const [drag, setDrag] = useState(false);
 
@@ -137,7 +138,7 @@ function AnalyzerPage({ onBack, onResult, error, setError }) {
     if (!file) return;
     setBusy(true); setError("");
     try {
-      const data = await uploadAgreement(file);
+      const data = await uploadAgreement(file, location);
       onResult(data);
     } catch (e) {
       setError(e.message);
@@ -184,6 +185,7 @@ function AnalyzerPage({ onBack, onResult, error, setError }) {
               <small>PDF or DOCX • Max 10 MB</small>
             </div>
             <div className="upload-help"><ShieldCheck size={18}/><div><b>Private by design</b><span>Your document is processed only for this analysis.</span></div></div>
+            <label className="location-field"><span>Property city or location <small>Optional, used for market estimates</small></span><input value={location} onChange={e=>setLocation(e.target.value)} placeholder="e.g. Pune or Bengaluru" /></label>
           </div>
         )}
 
@@ -223,6 +225,8 @@ function ResultsPage({ result, onBack, onHome }) {
           <InfoCard icon={AlertTriangle} label="PENALTY" value={info.penalty} />
         </div>
 
+        <RentForecast forecast={info.rent_forecast} />
+
         <section className="attention"><div className="attention-title"><span><AlertTriangle size={19}/></span><div><h2>Things You Should Know</h2><p>Important points detected from the agreement.</p></div></div><div className="attention-grid">
           {buildAttention(info, result?.clauses).map((x,i)=><div className="attention-card" key={i}><Check size={17}/><span>{x}</span></div>)}
         </div></section>
@@ -249,6 +253,12 @@ function ResultsPage({ result, onBack, onHome }) {
 }
 
 function InfoCard({icon:Icon,label,value,sub}) { return <div className="info-card"><div className="info-icon"><Icon size={18}/></div><span>{label}</span><strong>{value || "Not Found"}</strong>{sub && <small>{sub}</small>}</div> }
+function RentForecast({ forecast }) {
+  const contractual = forecast?.contractual;
+  const market = forecast?.market_estimate;
+  if (!contractual && !market) return null;
+  return <section className="rent-forecast"><div className="forecast-heading"><div className="forecast-icon"><CircleDollarSign size={19}/></div><div><span className="section-label">RENT INCREASE PREDICTOR</span><h2>Plan for what rent could cost next.</h2></div></div><div className="forecast-grid">{contractual && <div className="forecast-card exact"><span>CONTRACTUAL INCREASE</span><strong>{contractual.percentage}% after {formatPeriod(contractual.after_months)}</strong><p>Estimated future rent: <b>{formatMoney(contractual.future_rent)}</b></p><small>Based on an escalation clause found in your agreement.</small></div>}{market && <div className="forecast-card"><span>LOCATION-BASED PLANNING ESTIMATE</span><strong>{market.location}: {market.annual_low_percent}%–{market.annual_high_percent}% / year</strong><p>After 12 months: <b>{formatRange(market.after_12_months)}</b></p><p>After 24 months: <b>{formatRange(market.after_24_months)}</b></p><small>{market.basis}</small></div>}</div></section>;
+}
 function RiskSection({ risks, fairness }) {
   return <section className="risk-section"><div className="score-card"><div className="score-heading"><div className="score-icon"><Gauge size={20}/></div><div><span className="section-label">FAIRNESS SCORE</span><h2>{fairness?.score ?? 0}<small>/100</small></h2><p>{fairness?.label || "Needs review"}</p></div></div><div className="score-bar"><span style={{width: `${fairness?.score ?? 0}%`}} /></div><div className="factor-list">{(fairness?.factors || []).map(factor => <div className="factor" key={factor.name}><span>{factor.name}</span><b className={factor.status === "Found" ? "found" : "missing"}>{factor.status}</b></div>)}</div></div><div className="risk-card"><div className="risk-heading"><AlertTriangle size={19}/><div><span className="section-label">RISK DETECTION</span><h2>{risks.length ? `${risks.length} clause${risks.length === 1 ? "" : "s"} to review` : "No elevated risks found"}</h2></div></div>{risks.length ? risks.slice(0,4).map((risk,i)=><div className="risk-item" key={i}><span className={`risk-dot ${risk.level.toLowerCase()}`}></span><div><b>{risk.level} risk</b><p>{risk.reason}</p><small>“{risk.clause}”</small></div></div>) : <p className="clear-risk">The rule-based review did not detect a high or medium risk signal.</p>}</div></section>;
 }
@@ -298,6 +308,8 @@ function buildAttention(info, clauses=[]) {
   return arr.slice(0,3);
 }
 function formatBytes(n){ if(n<1024)return n+" B"; if(n<1024*1024)return (n/1024).toFixed(1)+" KB"; return (n/1024/1024).toFixed(1)+" MB"; }
-function formatMoney(v){ if(!v || v==="Not Found") return "Not Found"; return v.startsWith("₹") ? v : "₹"+v; }
+function formatMoney(v){ if(v === undefined || v === null || v === "Not Found") return "Not Found"; const value = String(v); return value.startsWith("₹") ? value : "₹"+value; }
+function formatRange(values){ return values?.map(value => formatMoney(value)).join("–") || "Not Found"; }
+function formatPeriod(months){ return months % 12 === 0 ? `${months / 12} year${months === 12 ? "" : "s"}` : `${months} months`; }
 
 createRoot(document.getElementById("root")).render(<App />);

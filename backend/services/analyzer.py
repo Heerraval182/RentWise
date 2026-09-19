@@ -14,7 +14,21 @@ def clean_number(value):
         return value
     return value.replace(",", "").strip()
 
-def analyze_document(text):
+MARKET_BENCHMARKS = {
+    "mumbai": (6, 8),
+    "delhi": (5, 7),
+    "new delhi": (5, 7),
+    "bengaluru": (5, 8),
+    "bangalore": (5, 8),
+    "hyderabad": (4, 7),
+    "pune": (5, 8),
+    "chennai": (4, 7),
+    "kolkata": (4, 6),
+    "ahmedabad": (4, 7),
+}
+
+
+def analyze_document(text, location=""):
     normalized = re.sub(r"\s+", " ", text)
 
     rent = first_match(normalized, [
@@ -39,6 +53,7 @@ def analyze_document(text):
         "Landlord" if re.search(r"(?:landlord|lessor).{0,80}maintenance", normalized, re.I) else "Not Found"
     )
     penalty = "Found" if re.search(r"penalty|late fee|late payment|fine", normalized, re.I) else "Not Found"
+    rent_forecast = predict_rent_increase(normalized, rent, location)
 
     categories = categorize(text)
     risks = detect_risks(normalized)
@@ -54,12 +69,63 @@ def analyze_document(text):
             "agreement_duration": duration,
             "maintenance": maintenance,
             "penalty": penalty,
+            "rent_forecast": rent_forecast,
         },
         "clauses": categories,
         "risks": risks,
         "fairness": fairness,
         "summary": summary,
     }
+
+
+def parse_amount(value):
+    if value == "Not Found":
+        return None
+    digits = re.sub(r"[^0-9.]", "", value)
+    return float(digits) if digits else None
+
+
+def predict_rent_increase(text, rent, location=""):
+    current = parse_amount(clean_number(rent))
+    escalation = re.search(
+        r"(?:rent|rental|lease)[^.\n]{0,100}?(?:increase|escalat|hike|rise)[^.\n]{0,60}?(\d+(?:\.\d+)?)\s*(?:%|percent|per cent)[^.\n]{0,50}?(?:after|from|at the end of)\s*(\d+)\s*(months?|years?)",
+        text,
+        re.I,
+    )
+    if not escalation:
+        escalation = re.search(
+            r"(?:increase|escalat|hike|rise)[^.\n]{0,60}?(\d+(?:\.\d+)?)\s*(?:%|percent|per cent)[^.\n]{0,50}?(?:after|from|at the end of)\s*(\d+)\s*(months?|years?)",
+            text,
+            re.I,
+        )
+
+    contractual = None
+    if escalation and current is not None:
+        percentage = float(escalation.group(1))
+        period = int(escalation.group(2))
+        period_months = period * 12 if escalation.group(3).lower().startswith("year") else period
+        future = round(current * (1 + percentage / 100))
+        contractual = {
+            "percentage": percentage,
+            "after_months": period_months,
+            "future_rent": future,
+            "source": escalation.group(0).strip(),
+        }
+
+    normalized_location = location.strip().lower()
+    matched_location = next((name.title() for name in MARKET_BENCHMARKS if name in normalized_location or name in text.lower()), None)
+    low, high = MARKET_BENCHMARKS.get(matched_location.lower() if matched_location else "", (5, 8))
+    market = None
+    if current is not None:
+        market = {
+            "location": matched_location or (location.strip() or "General estimate"),
+            "annual_low_percent": low,
+            "annual_high_percent": high,
+            "after_12_months": [round(current * (1 + low / 100)), round(current * (1 + high / 100))],
+            "after_24_months": [round(current * (1 + low / 100) ** 2), round(current * (1 + high / 100) ** 2)],
+            "basis": "RentWise planning estimate, not live market data or legal advice.",
+        }
+    return {"contractual": contractual, "market_estimate": market}
 
 def categorize(text):
     keyword_map = {
