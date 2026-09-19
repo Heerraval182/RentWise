@@ -1,4 +1,6 @@
+import json
 import re
+from pathlib import Path
 
 from services.classifier import CATEGORIES, predict_category
 
@@ -26,6 +28,9 @@ MARKET_BENCHMARKS = {
     "kolkata": (4, 6),
     "ahmedabad": (4, 7),
 }
+BENCHMARK_FILE = Path(__file__).resolve().parents[1] / "data" / "india_city_benchmarks.json"
+if BENCHMARK_FILE.exists():
+    MARKET_BENCHMARKS.update(json.loads(BENCHMARK_FILE.read_text(encoding="utf-8")))
 
 
 def analyze_document(text, location=""):
@@ -113,17 +118,19 @@ def predict_rent_increase(text, rent, location=""):
         }
 
     normalized_location = location.strip().lower()
-    matched_location = next((name.title() for name in MARKET_BENCHMARKS if name in normalized_location or name in text.lower()), None)
-    low, high = MARKET_BENCHMARKS.get(matched_location.lower() if matched_location else "", (5, 8))
+    agreement_text = text.lower()
+    matched_key = next((name for name in MARKET_BENCHMARKS if name in normalized_location or name in agreement_text), None)
+    matched_location = matched_key.title() if matched_key else None
+    low, high = MARKET_BENCHMARKS.get(matched_key or "", (4, 7))
     market = None
     if current is not None:
         market = {
-            "location": matched_location or (location.strip() or "General estimate"),
+            "location": matched_location or (location.strip() or "India-wide estimate"),
             "annual_low_percent": low,
             "annual_high_percent": high,
             "after_12_months": [round(current * (1 + low / 100)), round(current * (1 + high / 100))],
             "after_24_months": [round(current * (1 + low / 100) ** 2), round(current * (1 + high / 100) ** 2)],
-            "basis": "RentWise planning estimate, not live market data or legal advice.",
+            "basis": "City benchmark where available; otherwise an India-wide planning estimate. Not live market data or legal advice.",
         }
     return {"contractual": contractual, "market_estimate": market}
 

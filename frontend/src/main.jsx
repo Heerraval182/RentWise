@@ -119,7 +119,7 @@ function HomePage({ onStart }) {
         </section>
 
         <section className="future">
-          <div><span className="section-label">BUILT FOR WHAT'S NEXT</span><h2>A simple first step toward smarter agreements.</h2></div>
+          <div><span className="section-label">AVAILABLE AFTER ANALYSIS</span><h2>More clarity for every agreement.</h2></div>
           <RoadmapFeatures />
         </section>
       </main>
@@ -245,7 +245,7 @@ function ResultsPage({ result, onBack, onHome }) {
 
         <section className="summary"><div className="summary-icon"><Sparkles size={20}/></div><div><span className="section-label">BASIC AGREEMENT SUMMARY</span><h2>What RentWise found</h2><p>{result?.summary}</p><small>This is a rule-based summary for the current project phase, not advanced AI-generated legal advice.</small></div></section>
 
-        <section className="coming"><div className="section-heading"><span>COMING NEXT</span><h2>More clarity is on the roadmap.</h2></div><RoadmapFeatures /></section>
+        <section className="coming"><div className="section-heading"><span>AVAILABLE TOOLS</span><h2>More clarity for your agreement.</h2></div><RoadmapFeatures /></section>
       </main>
       <Footer />
     </>
@@ -293,7 +293,7 @@ function ResultPill({text}) { return <div className="result-pill"><Check size={1
 function Value({icon:Icon,title,text}) { return <div className="value"><span><Icon size={19}/></span><div><b>{title}</b><small>{text}</small></div></div> }
 function Step({n,title,text,icon:Icon}) { return <div className="step"><span className="step-num">{n}</span><div className="step-icon"><Icon size={22}/></div><h3>{title}</h3><p>{text}</p></div> }
 function RoadmapFeatures() { return <div className="future-grid">{roadmapFeatures.map(([icon, title, text]) => <Future key={title} icon={icon} title={title} text={text} />)}</div> }
-function Future({icon:Icon,title,text}) { return <div className="future-card"><div className="future-icon"><Icon size={19}/></div><div><h3>{title}<span>COMING SOON</span></h3><p>{text}</p></div><Lock size={16}/></div> }
+function Future({icon:Icon,title,text}) { return <div className="future-card"><div className="future-icon"><Icon size={19}/></div><div><h3>{title}<span>AVAILABLE NOW</span></h3><p>{text}</p></div><Check className="available-icon" size={16}/></div> }
 function Process({text,done,active}) { return <div className={"process " + (done?"done ":"")+(active?"active":"")}><span>{done?<Check size={13}/>:active?<LoaderCircle size={13}/>:null}</span>{text}</div> }
 function Footer(){return <footer><div className="footer-brand"><span className="brand-mark"><FileText size={17}/><Check size={11}/></span><b>RentWise</b></div><span>General information only — not professional legal advice.</span></footer>}
 
