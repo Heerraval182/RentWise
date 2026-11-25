@@ -21,7 +21,7 @@ const AMENITIES_LIST = [
   "Children's Play Area"
 ];
 
-export default function BrokerDashboard({ onAnalyzeAgreement }) {
+export default function BrokerDashboard({ onAnalyzeAgreement, currentUser, onRequireLogin }) {
   const [activeTab, setActiveTab] = useState("match"); // "match" | "leads" | "all"
 
   // Matching criteria state
@@ -237,7 +237,10 @@ export default function BrokerDashboard({ onAnalyzeAgreement }) {
 👤 Owner Contact: ${property.owner_name} (${property.owner_phone})
 ${property.image_url ? `📸 Photo: ${property.image_url}` : ""}
 
-Please let me know if you would like me to schedule a visit for you!`;
+Please let me know if you would like me to schedule a visit for you!
+
+Best regards,
+${currentUser?.name || "Licensed Real Estate Advisor"}${currentUser?.agency_name ? `\n🏢 ${currentUser.agency_name}` : ""}`;
 
     navigator.clipboard.writeText(pitch);
     setCopiedId(property.id);
@@ -257,6 +260,11 @@ Please let me know if you would like me to schedule a visit for you!`;
         <div className="hero-content">
           <div className="eyebrow broker-eyebrow">
             <Briefcase size={14} /> Broker & Agent Intelligence Hub
+            {currentUser && (
+              <span style={{ marginLeft: "8px", fontWeight: 600, color: "var(--navy)" }}>
+                • Logged in as {currentUser.name} {currentUser.agency_name ? `(${currentUser.agency_name})` : ""}
+              </span>
+            )}
           </div>
           <h1>Instant Property Matcher for Brokers</h1>
           <p>

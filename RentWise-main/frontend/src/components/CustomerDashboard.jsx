@@ -1,10 +1,22 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useId } from "react";
 import {
-  Plus, Search, Filter, Home, Bed, Bath, Layers, MapPin, Phone,
-  Trash2, Eye, CheckCircle2, AlertCircle, Sparkles, Building, Key,
-  Tag, RefreshCw, X, Check, ArrowRight
+  Plus, Search, Home, Bed, Bath, Layers, MapPin, Phone,
+  Trash2, Eye, CheckCircle2, AlertCircle, Building, Key,
+  Tag, RefreshCw, X, Check, ArrowRight, FileText, Bookmark,
+  User, ShieldCheck, Gauge, Sparkles, Edit3
 } from "lucide-react";
-import { getProperties, createProperty, updateProperty, deleteProperty } from "../services/api";
+import {
+  getProperties,
+  createProperty,
+  updateProperty,
+  deleteProperty,
+  getSavedProperties,
+  savePropertyToAccount,
+  removeSavedPropertyFromAccount,
+  getSavedAgreements,
+  deleteSavedAgreement,
+  updateUserProfile,
+} from "../services/api";
 import PropertyDetailsModal, { formatPrice } from "./PropertyDetailsModal";
 
 const AMENITY_OPTIONS = [
@@ -33,23 +45,55 @@ const SAMPLE_IMAGES = [
   "https://images.unsplash.com/photo-1502672260266-1c1ef2d93688?auto=format&fit=crop&w=800&q=80"
 ];
 
-export default function CustomerDashboard({ onAnalyzeAgreement }) {
+export default function CustomerDashboard({
+  onAnalyzeAgreement,
+  onOpenAgreement,
+  currentUser,
+  authToken,
+  onUserUpdated,
+  onRequireLogin,
+  initialSection = "overview",
+}) {
+  // "overview" | "buy" | "rent" | "account"
+  const [activeSection, setActiveSection] = useState(initialSection);
+  const [accountTab, setAccountTab] = useState("agreements"); // "profile" | "saved" | "agreements" | "listings"
+
   const [properties, setProperties] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [successMsg, setSuccessMsg] = useState("");
 
+  // Account data
+  const [savedIds, setSavedIds] = useState([]);
+  const [savedProperties, setSavedProperties] = useState([]);
+  const [savedAgreements, setSavedAgreements] = useState([]);
+  const [accountLoading, setAccountLoading] = useState(false);
+
+  // Profile form state
+  const [profileName, setProfileName] = useState(currentUser?.name || "");
+  const [profilePhone, setProfilePhone] = useState(currentUser?.phone || "");
+  const [profileSaving, setProfileSaving] = useState(false);
+
   // Filters
-  const [listingFilter, setListingFilter] = useState("all");
   const [cityFilter, setCityFilter] = useState("all");
+  const [bhkFilter, setBhkFilter] = useState("all");
   const [searchTerm, setSearchTerm] = useState("");
 
   // Modals
   const [showAddModal, setShowAddModal] = useState(false);
+  const [addDefaultListingType, setAddDefaultListingType] = useState("rent");
   const [selectedProperty, setSelectedProperty] = useState(null);
 
-  // Load properties
-  async function loadData() {
+  useEffect(() => {
+    setActiveSection(initialSection || "overview");
+  }, [initialSection]);
+
+  useEffect(() => {
+    setProfileName(currentUser?.name || "");
+    setProfilePhone(currentUser?.phone || "");
+  }, [currentUser]);
+
+  async function loadProperties() {
     setLoading(true);
     setError("");
     try {
@@ -62,14 +106,143 @@ export default function CustomerDashboard({ onAnalyzeAgreement }) {
     }
   }
 
+  async function loadAccountData() {
+    if (!authToken) {
+      setSavedIds([]);
+      setSavedProperties([]);
+      setSavedAgreements([]);
+      return;
+    }
+    setAccountLoading(true);
+    try {
+      const [savedRes, agreementsRes] = await Promise.all([
+        getSavedProperties(authToken),
+        getSavedAgreements(authToken),
+      ]);
+      setSavedIds(savedRes.saved_ids || []);
+      setSavedProperties(savedRes.properties || []);
+      setSavedAgreements(agreementsRes || []);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setAccountLoading(false);
+    }
+  }
+
   useEffect(() => {
-    loadData();
+    loadProperties();
   }, []);
 
-  // Filter properties
+  useEffect(() => {
+    loadAccountData();
+  }, [authToken, currentUser?.id]);
+
+  function showToast(msg) {
+    setSuccessMsg(msg);
+    setTimeout(() => setSuccessMsg(""), 3500);
+  }
+
+  // Toggle Save Property
+  async function handleToggleSave(propertyId) {
+    if (!authToken || !currentUser) {
+      if (onRequireLogin) onRequireLogin();
+      return;
+    }
+    const currentlySaved = savedIds.includes(propertyId);
+    try {
+      if (currentlySaved) {
+        const res = await removeSavedPropertyFromAccount(authToken, propertyId);
+        setSavedIds(res.saved_ids || []);
+        setSavedProperties((prev) => prev.filter((p) => p.id !== propertyId));
+        showToast("Removed property from Saved Properties.");
+      } else {
+        const res = await savePropertyToAccount(authToken, propertyId);
+        setSavedIds(res.saved_ids || []);
+        const matchedProp = properties.find((p) => p.id === propertyId);
+        if (matchedProp) {
+          setSavedProperties((prev) => [matchedProp, ...prev.filter((p) => p.id !== propertyId)]);
+        }
+        showToast("Property saved to My Account!");
+      }
+    } catch (err) {
+      setError(err.message || "Failed to update saved properties.");
+    }
+  }
+
+  // Delete saved agreement
+  async function handleDeleteAgreement(agreement) {
+    if (!authToken) return;
+    if (!window.confirm(`Remove "${agreement.filename}" from your saved agreements?`)) return;
+    try {
+      await deleteSavedAgreement(authToken, agreement.id);
+      setSavedAgreements((prev) => prev.filter((a) => a.id !== agreement.id));
+      showToast(`Removed "${agreement.filename}" from My Account.`);
+    } catch (err) {
+      setError(err.message || "Failed to remove agreement.");
+    }
+  }
+
+  // Save profile
+  async function handleSaveProfile(e) {
+    e.preventDefault();
+    if (!authToken) return;
+    setProfileSaving(true);
+    setError("");
+    try {
+      const res = await updateUserProfile(authToken, {
+        name: profileName,
+        phone: profilePhone,
+      });
+      if (onUserUpdated && res.user) {
+        onUserUpdated(res.user);
+      }
+      showToast("Profile updated successfully!");
+    } catch (err) {
+      setError(err.message || "Failed to update profile.");
+    } finally {
+      setProfileSaving(false);
+    }
+  }
+
+  // Toggle status
+  async function handleToggleStatus(property) {
+    const nextStatus =
+      property.status === "available"
+        ? property.listing_type === "rent"
+          ? "rented"
+          : "sold"
+        : "available";
+
+    try {
+      const updated = await updateProperty(property.id, { status: nextStatus });
+      setProperties((prev) => prev.map((item) => (item.id === property.id ? updated : item)));
+      showToast(`Status updated for "${property.title}" to ${nextStatus.toUpperCase()}`);
+    } catch (err) {
+      alert(err.message || "Failed to update status");
+    }
+  }
+
+  // Delete property
+  async function handleDelete(property) {
+    if (!window.confirm(`Are you sure you want to remove the listing "${property.title}"?`)) return;
+    try {
+      await deleteProperty(property.id);
+      setProperties((prev) => prev.filter((p) => p.id !== property.id));
+      setSavedProperties((prev) => prev.filter((p) => p.id !== property.id));
+      showToast(`Property "${property.title}" was removed.`);
+    } catch (err) {
+      alert(err.message || "Failed to delete property.");
+    }
+  }
+
+  // Filtered properties depending on section
+  const activeListingType =
+    activeSection === "buy" ? "sale" : activeSection === "rent" ? "rent" : "all";
+
   const filteredProperties = properties.filter((p) => {
-    if (listingFilter !== "all" && p.listing_type !== listingFilter) return false;
-    if (cityFilter !== "all" && p.city.toLowerCase() !== cityFilter.toLowerCase()) return false;
+    if (activeListingType !== "all" && p.listing_type !== activeListingType) return false;
+    if (cityFilter !== "all" && (p.city || "").toLowerCase() !== cityFilter.toLowerCase()) return false;
+    if (bhkFilter !== "all" && !(p.bhk || "").toLowerCase().includes(bhkFilter.toLowerCase())) return false;
     if (searchTerm.trim()) {
       const q = searchTerm.toLowerCase();
       const match =
@@ -84,327 +257,624 @@ export default function CustomerDashboard({ onAnalyzeAgreement }) {
   });
 
   // Stats
-  const totalCount = properties.length;
-  const rentCount = properties.filter((p) => p.listing_type === "rent").length;
-  const saleCount = properties.filter((p) => p.listing_type === "sale").length;
-  const availableCount = properties.filter((p) => p.status === "available").length;
-
-  // Toggle status
-  async function handleToggleStatus(property) {
-    const nextStatus =
-      property.status === "available"
-        ? property.listing_type === "rent"
-          ? "rented"
-          : "sold"
-        : "available";
-
-    try {
-      const updated = await updateProperty(property.id, { status: nextStatus });
-      setProperties((prev) => prev.map((item) => (item.id === property.id ? updated : item)));
-      setSuccessMsg(`Status updated for "${property.title}" to ${nextStatus.toUpperCase()}`);
-      setTimeout(() => setSuccessMsg(""), 3500);
-    } catch (err) {
-      alert(err.message || "Failed to update status");
-    }
-  }
-
-  // Delete property
-  async function handleDelete(property) {
-    if (!window.confirm(`Are you sure you want to remove the listing "${property.title}"?`)) return;
-    try {
-      await deleteProperty(property.id);
-      setProperties((prev) => prev.filter((p) => p.id !== property.id));
-      setSuccessMsg(`Property "${property.title}" was removed.`);
-      setTimeout(() => setSuccessMsg(""), 3500);
-    } catch (err) {
-      alert(err.message || "Failed to delete property.");
-    }
-  }
+  const rentCount = properties.filter((p) => p.listing_type === "rent" && p.status === "available").length;
+  const saleCount = properties.filter((p) => p.listing_type === "sale" && p.status === "available").length;
+  const myListings = currentUser
+    ? properties.filter(
+        (p) =>
+          (p.owner_email && currentUser.email && p.owner_email.toLowerCase() === currentUser.email.toLowerCase()) ||
+          (p.owner_name && currentUser.name && p.owner_name.toLowerCase() === currentUser.name.toLowerCase())
+      )
+    : [];
 
   return (
     <div className="dashboard-page customer-dashboard">
-      {/* Top Banner / Hero */}
+      {/* Top Banner */}
       <div className="dashboard-hero">
         <div className="hero-content">
           <div className="eyebrow">
-            <Building size={14} /> Property Owner & Lister Portal
+            <Building size={14} /> Customer Dashboard
+            {currentUser && (
+              <span style={{ marginLeft: "8px", fontWeight: 700, color: "#6ee7b7" }}>
+                • Welcome, {currentUser.name}
+              </span>
+            )}
           </div>
-          <h1>Manage Your Property Listings</h1>
+          <h1>Customer Dashboard</h1>
           <p>
-            Add complete property details for <b>Rent</b> or <b>Sale</b>, track availability, and connect directly with verified tenants, buyers, and brokers.
+            Analyze rental agreements, explore properties available to buy or rent, and manage your saved homes and agreements in one place.
           </p>
-          <div className="hero-buttons">
-            <button className="primary-btn pulse-btn" onClick={() => setShowAddModal(true)}>
-              <Plus size={18} /> Add New Property Listing
-            </button>
-            <button className="secondary-btn" onClick={loadData}>
-              <RefreshCw size={15} /> Refresh Listings
-            </button>
-          </div>
         </div>
       </div>
 
-      {/* Stats Ribbon */}
-      <div className="stats-ribbon">
-        <div className="stat-card">
-          <div className="stat-icon total">
-            <Building size={20} />
+      {/* Primary Customer Hub Options */}
+      <section className="customer-hub-grid" aria-label="Customer Dashboard Options">
+        <button
+          type="button"
+          className="customer-hub-card analyzer"
+          onClick={() => onAnalyzeAgreement("")}
+        >
+          <div className="hub-card-icon analyzer">
+            <FileText size={22} />
           </div>
-          <div>
-            <span className="stat-label">TOTAL PROPERTIES</span>
-            <strong className="stat-val">{totalCount}</strong>
+          <div className="hub-card-body">
+            <h3>Analyze Agreement</h3>
+            <p>Upload PDF/DOCX and detect important clauses and risks.</p>
           </div>
-        </div>
+          <span className="hub-card-cta">
+            Open Analyzer <ArrowRight size={15} />
+          </span>
+        </button>
 
-        <div className="stat-card">
-          <div className="stat-icon rent">
-            <Key size={20} />
+        <button
+          type="button"
+          className={`customer-hub-card buy ${activeSection === "buy" ? "active" : ""}`}
+          onClick={() => setActiveSection("buy")}
+        >
+          <div className="hub-card-icon buy">
+            <Tag size={22} />
           </div>
-          <div>
-            <span className="stat-label">FOR RENT</span>
-            <strong className="stat-val">{rentCount}</strong>
+          <div className="hub-card-body">
+            <h3>Buy a Property</h3>
+            <p>Explore properties available for purchase ({saleCount} available).</p>
           </div>
-        </div>
+          <span className="hub-card-cta">
+            Explore Purchase <ArrowRight size={15} />
+          </span>
+        </button>
 
-        <div className="stat-card">
-          <div className="stat-icon sale">
-            <Tag size={20} />
+        <button
+          type="button"
+          className={`customer-hub-card rent ${activeSection === "rent" ? "active" : ""}`}
+          onClick={() => setActiveSection("rent")}
+        >
+          <div className="hub-card-icon rent">
+            <Key size={22} />
           </div>
-          <div>
-            <span className="stat-label">FOR SALE</span>
-            <strong className="stat-val">{saleCount}</strong>
+          <div className="hub-card-body">
+            <h3>Rent a Property</h3>
+            <p>Search available rental properties ({rentCount} available).</p>
           </div>
-        </div>
+          <span className="hub-card-cta">
+            Search Rentals <ArrowRight size={15} />
+          </span>
+        </button>
 
-        <div className="stat-card">
-          <div className="stat-icon available">
-            <CheckCircle2 size={20} />
+        <button
+          type="button"
+          className={`customer-hub-card account ${activeSection === "account" ? "active" : ""}`}
+          onClick={() => {
+            if (!currentUser && onRequireLogin) {
+              onRequireLogin();
+            } else {
+              setActiveSection("account");
+            }
+          }}
+        >
+          <div className="hub-card-icon account">
+            <User size={22} />
           </div>
-          <div>
-            <span className="stat-label">ACTIVE & AVAILABLE</span>
-            <strong className="stat-val">{availableCount}</strong>
+          <div className="hub-card-body">
+            <h3>My Account</h3>
+            <p>Manage profile, saved properties and agreements.</p>
           </div>
-        </div>
-      </div>
+          <span className="hub-card-cta">
+            {currentUser
+              ? `${savedProperties.length} Saved • ${savedAgreements.length} Docs`
+              : "User Login Required"}
+            <ArrowRight size={15} />
+          </span>
+        </button>
+      </section>
 
       {/* Feedback Messages */}
       {successMsg && (
-        <div className="toast-success">
+        <div className="toast-success" role="status">
           <CheckCircle2 size={18} />
           <span>{successMsg}</span>
         </div>
       )}
 
       {error && (
-        <div className="error-box">
+        <div className="error-box" role="alert">
           <AlertCircle size={18} />
           <div>
-            <b>Error loading listings:</b>
+            <b>Action Notice:</b>
             <span>{error}</span>
           </div>
         </div>
       )}
 
-      {/* Control Bar: Filters & Search */}
-      <div className="controls-bar">
-        <div className="filter-group">
-          <button
-            className={`filter-chip ${listingFilter === "all" ? "active" : ""}`}
-            onClick={() => setListingFilter("all")}
-          >
-            All Listings ({totalCount})
-          </button>
-          <button
-            className={`filter-chip ${listingFilter === "rent" ? "active" : ""}`}
-            onClick={() => setListingFilter("rent")}
-          >
-            For Rent ({rentCount})
-          </button>
-          <button
-            className={`filter-chip ${listingFilter === "sale" ? "active" : ""}`}
-            onClick={() => setListingFilter("sale")}
-          >
-            For Sale ({saleCount})
-          </button>
-        </div>
-
-        <div className="search-group">
-          <div className="search-input-wrap">
-            <Search size={16} />
-            <input
-              type="text"
-              placeholder="Search by title, locality, city, or BHK..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-            />
-            {searchTerm && (
-              <button className="clear-search-btn" onClick={() => setSearchTerm("")}>
-                <X size={14} />
+      {/* SECTION: MY ACCOUNT */}
+      {activeSection === "account" ? (
+        <section className="my-account-section">
+          <div className="account-header-bar">
+            <div>
+              <span className="section-label">MY ACCOUNT</span>
+              <h2>Profile, Saved Properties & Agreements</h2>
+            </div>
+            <div className="account-subtabs" role="tablist">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={accountTab === "agreements"}
+                className={`filter-chip ${accountTab === "agreements" ? "active" : ""}`}
+                onClick={() => setAccountTab("agreements")}
+              >
+                <FileText size={14} /> Saved Agreements ({savedAgreements.length})
               </button>
-            )}
+              <button
+                type="button"
+                role="tab"
+                aria-selected={accountTab === "saved"}
+                className={`filter-chip ${accountTab === "saved" ? "active" : ""}`}
+                onClick={() => setAccountTab("saved")}
+              >
+                <Bookmark size={14} /> Saved Properties ({savedProperties.length})
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={accountTab === "listings"}
+                className={`filter-chip ${accountTab === "listings" ? "active" : ""}`}
+                onClick={() => setAccountTab("listings")}
+              >
+                <Building size={14} /> My Listings ({myListings.length})
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={accountTab === "profile"}
+                className={`filter-chip ${accountTab === "profile" ? "active" : ""}`}
+                onClick={() => setAccountTab("profile")}
+              >
+                <User size={14} /> Profile Settings
+              </button>
+            </div>
           </div>
 
-          <select
-            className="city-select"
-            value={cityFilter}
-            onChange={(e) => setCityFilter(e.target.value)}
-          >
-            <option value="all">All Cities</option>
-            <option value="Pune">Pune</option>
-            <option value="Bengaluru">Bengaluru</option>
-            <option value="Mumbai">Mumbai</option>
-            <option value="Delhi NCR">Delhi NCR</option>
-            <option value="Hyderabad">Hyderabad</option>
-          </select>
-        </div>
-      </div>
-
-      {/* Property Cards Grid */}
-      {loading ? (
-        <div className="loading-state">
-          <RefreshCw size={32} className="spin-icon" />
-          <p>Loading properties...</p>
-        </div>
-      ) : filteredProperties.length === 0 ? (
-        <div className="empty-state">
-          <Building size={48} />
-          <h3>No properties found</h3>
-          <p>Try adjusting your search criteria or add your first property listing above.</p>
-          <button className="primary-btn compact" onClick={() => setShowAddModal(true)}>
-            <Plus size={16} /> Add Property Now
-          </button>
-        </div>
-      ) : (
-        <div className="properties-grid">
-          {filteredProperties.map((property) => {
-            const isRent = property.listing_type === "rent";
-            const amenities = Array.isArray(property.amenities) ? property.amenities : [];
-
-            return (
-              <div key={property.id} className={`property-card status-${property.status}`}>
-                <div className="card-media">
-                  <img
-                    src={property.image_url || SAMPLE_IMAGES[0]}
-                    alt={property.title}
-                    className="card-thumb"
-                  />
-                  <div className="card-overlay-top">
-                    <span className={`badge-pill ${isRent ? "rent-pill" : "sale-pill"}`}>
-                      {isRent ? "FOR RENT" : "FOR SALE"}
-                    </span>
-                    <span className={`badge-pill status-${property.status}`}>
-                      {property.status.toUpperCase()}
-                    </span>
-                  </div>
-                  <div className="card-overlay-bottom">
-                    <strong className="card-price">
-                      {formatPrice(property.price, property.listing_type)}
-                    </strong>
-                    {isRent && property.deposit > 0 && (
-                      <span className="card-deposit">
-                        Deposit: ₹{Number(property.deposit).toLocaleString("en-IN")}
-                      </span>
-                    )}
-                  </div>
+          {/* Account Sub-tab: Saved Agreements */}
+          {accountTab === "agreements" && (
+            <div className="account-panel">
+              <div className="account-panel-head">
+                <div>
+                  <h3>Analyzed Rental Agreements</h3>
+                  <p>Agreements you analyzed while signed in (or saved after login) appear here for quick review.</p>
                 </div>
+                <button
+                  type="button"
+                  className="primary-btn compact"
+                  onClick={() => onAnalyzeAgreement("")}
+                >
+                  <Plus size={15} /> Analyze New Agreement
+                </button>
+              </div>
 
-                <div className="card-body">
-                  <div className="card-meta">
-                    <span className="bhk-badge">{property.bhk || "2 BHK"}</span>
-                    <span className="type-badge">{property.property_type || "Apartment"}</span>
-                    <span className="furnish-badge">{property.furnishing || "Semi"}</span>
-                  </div>
-
-                  <h3 className="card-title" title={property.title}>
-                    {property.title}
-                  </h3>
-
-                  <div className="card-location">
-                    <MapPin size={15} />
-                    <span>
-                      {property.locality}, {property.city}
-                    </span>
-                  </div>
-
-                  <div className="card-specs">
-                    <div className="spec-unit">
-                      <Bed size={14} />
-                      <span>{property.bhk}</span>
-                    </div>
-                    <div className="spec-unit">
-                      <Bath size={14} />
-                      <span>{property.bathrooms || 1} Bath</span>
-                    </div>
-                    {property.area_sqft > 0 && (
-                      <div className="spec-unit">
-                        <Layers size={14} />
-                        <span>{property.area_sqft} sq.ft</span>
-                      </div>
-                    )}
-                  </div>
-
-                  {amenities.length > 0 && (
-                    <div className="card-amenities">
-                      {amenities.slice(0, 3).map((a, i) => (
-                        <span key={i} className="mini-amenity-tag">
-                          {a}
+              {accountLoading ? (
+                <div className="loading-state">
+                  <RefreshCw size={28} className="spin-icon" />
+                  <p>Loading your saved agreements...</p>
+                </div>
+              ) : savedAgreements.length === 0 ? (
+                <div className="empty-state">
+                  <FileText size={44} />
+                  <h3>No saved agreements yet</h3>
+                  <p>Upload any PDF or DOCX rental agreement to automatically detect clauses, risks, and fairness score.</p>
+                  <button
+                    type="button"
+                    className="primary-btn compact"
+                    onClick={() => onAnalyzeAgreement("")}
+                  >
+                    <Sparkles size={15} /> Analyze an Agreement
+                  </button>
+                </div>
+              ) : (
+                <div className="saved-agreements-grid">
+                  {savedAgreements.map((agr) => (
+                    <div key={agr.id} className="saved-agreement-card">
+                      <div className="saved-agr-top">
+                        <div className="saved-agr-icon">
+                          <FileText size={20} />
+                        </div>
+                        <div className="saved-agr-title">
+                          <strong>{agr.filename}</strong>
+                          <small>
+                            {agr.location ? `${agr.location} • ` : ""}
+                            {agr.created_at ? new Date(agr.created_at.replace(" ", "T")).toLocaleDateString() : "Saved"}
+                          </small>
+                        </div>
+                        <span className="fairness-pill">
+                          <Gauge size={13} /> {agr.fairness_score}/100
                         </span>
-                      ))}
-                      {amenities.length > 3 && (
-                        <span className="mini-amenity-more">+{amenities.length - 3}</span>
-                      )}
-                    </div>
-                  )}
+                      </div>
 
-                  <div className="card-footer">
-                    <div className="owner-mini">
-                      <small>Owner:</small>
-                      <b>{property.owner_name}</b>
+                      <div className="saved-agr-metrics">
+                        <div>
+                          <small>Monthly Rent</small>
+                          <b>{agr.monthly_rent || "Not Found"}</b>
+                        </div>
+                        <div>
+                          <small>Security Deposit</small>
+                          <b>{agr.security_deposit || "Not Found"}</b>
+                        </div>
+                        <div>
+                          <small>Flagged Risks</small>
+                          <b>{agr.risk_count || 0} clauses</b>
+                        </div>
+                      </div>
+
+                      <div className="saved-agr-actions">
+                        <button
+                          type="button"
+                          className="primary-btn compact"
+                          onClick={() => onOpenAgreement && onOpenAgreement(agr.analysis)}
+                        >
+                          <Eye size={14} /> View Full Analysis
+                        </button>
+                        <button
+                          type="button"
+                          className="action-icon-btn delete"
+                          title="Delete saved agreement"
+                          aria-label={`Delete ${agr.filename}`}
+                          onClick={() => handleDeleteAgreement(agr)}
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
                     </div>
-                    <div className="card-actions">
-                      <button
-                        className="action-icon-btn view"
-                        title="View Full Details"
-                        onClick={() => setSelectedProperty(property)}
-                      >
-                        <Eye size={16} />
-                      </button>
-                      <button
-                        className={`action-icon-btn status-btn ${property.status}`}
-                        title={
-                          property.status === "available"
-                            ? `Mark as ${isRent ? "Rented" : "Sold"}`
-                            : "Mark as Available"
-                        }
-                        onClick={() => handleToggleStatus(property)}
-                      >
-                        <CheckCircle2 size={16} />
-                      </button>
-                      <button
-                        className="action-icon-btn delete"
-                        title="Delete Property"
-                        onClick={() => handleDelete(property)}
-                      >
-                        <Trash2 size={16} />
-                      </button>
-                    </div>
-                  </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Account Sub-tab: Saved Properties */}
+          {accountTab === "saved" && (
+            <div className="account-panel">
+              <div className="account-panel-head">
+                <div>
+                  <h3>Saved Properties</h3>
+                  <p>Homes you bookmarked while exploring Buy a Property or Rent a Property.</p>
+                </div>
+                <div style={{ display: "flex", gap: "8px" }}>
+                  <button
+                    type="button"
+                    className="filter-chip"
+                    onClick={() => setActiveSection("buy")}
+                  >
+                    Browse Buy
+                  </button>
+                  <button
+                    type="button"
+                    className="filter-chip"
+                    onClick={() => setActiveSection("rent")}
+                  >
+                    Browse Rent
+                  </button>
                 </div>
               </div>
-            );
-          })}
-        </div>
+
+              {savedProperties.length === 0 ? (
+                <div className="empty-state">
+                  <Bookmark size={44} />
+                  <h3>No saved properties yet</h3>
+                  <p>Click the bookmark icon on any property under Buy or Rent to save it here.</p>
+                </div>
+              ) : (
+                <div className="properties-grid">
+                  {savedProperties.map((property) => (
+                    <PropertyCard
+                      key={property.id}
+                      property={property}
+                      isSaved={true}
+                      onToggleSave={() => handleToggleSave(property.id)}
+                      onView={() => setSelectedProperty(property)}
+                      canManage={false}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Account Sub-tab: My Property Listings */}
+          {accountTab === "listings" && (
+            <div className="account-panel">
+              <div className="account-panel-head">
+                <div>
+                  <h3>My Property Listings</h3>
+                  <p>Properties you have listed for Rent or Sale on RentWise.</p>
+                </div>
+                <button
+                  type="button"
+                  className="primary-btn compact"
+                  onClick={() => {
+                    setAddDefaultListingType("rent");
+                    setShowAddModal(true);
+                  }}
+                >
+                  <Plus size={15} /> Add New Property Listing
+                </button>
+              </div>
+
+              {myListings.length === 0 ? (
+                <div className="empty-state">
+                  <Building size={44} />
+                  <h3>You haven't listed a property yet</h3>
+                  <p>Own a property to rent out or sell? Publish a listing in under a minute.</p>
+                  <button
+                    type="button"
+                    className="primary-btn compact"
+                    onClick={() => {
+                      setAddDefaultListingType("rent");
+                      setShowAddModal(true);
+                    }}
+                  >
+                    <Plus size={15} /> List a Property
+                  </button>
+                </div>
+              ) : (
+                <div className="properties-grid">
+                  {myListings.map((property) => (
+                    <PropertyCard
+                      key={property.id}
+                      property={property}
+                      isSaved={savedIds.includes(property.id)}
+                      onToggleSave={() => handleToggleSave(property.id)}
+                      onView={() => setSelectedProperty(property)}
+                      onToggleStatus={() => handleToggleStatus(property)}
+                      onDelete={() => handleDelete(property)}
+                      canManage={true}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Account Sub-tab: Profile Settings */}
+          {accountTab === "profile" && (
+            <div className="account-panel profile-panel">
+              <div className="account-panel-head">
+                <div>
+                  <h3>Profile Settings</h3>
+                  <p>Keep your contact details up to date for property inquiries and listings.</p>
+                </div>
+                <span className="auth-badge">
+                  <ShieldCheck size={14} /> Customer / General User
+                </span>
+              </div>
+
+              <form onSubmit={handleSaveProfile} className="profile-form">
+                <div className="form-row">
+                  <div className="form-group flex-1">
+                    <label htmlFor="profile-name">Full Name *</label>
+                    <input
+                      id="profile-name"
+                      type="text"
+                      required
+                      autoComplete="name"
+                      value={profileName}
+                      onChange={(e) => setProfileName(e.target.value)}
+                    />
+                  </div>
+                  <div className="form-group flex-1">
+                    <label htmlFor="profile-phone">Phone Number</label>
+                    <input
+                      id="profile-phone"
+                      type="tel"
+                      autoComplete="tel"
+                      placeholder="+91 98765 43210"
+                      value={profilePhone}
+                      onChange={(e) => setProfilePhone(e.target.value)}
+                    />
+                  </div>
+                </div>
+
+                <div className="form-group">
+                  <label htmlFor="profile-email">Email Address</label>
+                  <input
+                    id="profile-email"
+                    type="email"
+                    value={currentUser?.email || ""}
+                    disabled
+                  />
+                </div>
+
+                <button type="submit" className="primary-btn compact" disabled={profileSaving}>
+                  <Edit3 size={15} /> {profileSaving ? "Saving Profile..." : "Save Profile Changes"}
+                </button>
+              </form>
+            </div>
+          )}
+        </section>
+      ) : (
+        /* SECTIONS: OVERVIEW / BUY A PROPERTY / RENT A PROPERTY */
+        <>
+          <div className="section-banner-row">
+            <div>
+              <span className="section-label">
+                {activeSection === "buy"
+                  ? "BUY A PROPERTY"
+                  : activeSection === "rent"
+                  ? "RENT A PROPERTY"
+                  : "EXPLORE PROPERTIES"}
+              </span>
+              <h2>
+                {activeSection === "buy"
+                  ? "Properties Available for Purchase"
+                  : activeSection === "rent"
+                  ? "Available Rental Properties"
+                  : "Browse Properties to Buy or Rent"}
+              </h2>
+            </div>
+            <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
+              {activeSection !== "overview" && (
+                <button
+                  type="button"
+                  className="filter-chip"
+                  onClick={() => setActiveSection("overview")}
+                >
+                  Show All ({properties.length})
+                </button>
+              )}
+              <button
+                type="button"
+                className="primary-btn compact"
+                onClick={() => {
+                  if (!currentUser && onRequireLogin) {
+                    onRequireLogin();
+                  } else {
+                    setAddDefaultListingType(activeSection === "buy" ? "sale" : "rent");
+                    setShowAddModal(true);
+                  }
+                }}
+              >
+                <Plus size={16} /> List a Property
+              </button>
+            </div>
+          </div>
+
+          {/* Control Bar: Filters & Search */}
+          <div className="controls-bar">
+            <div className="filter-group">
+              <button
+                type="button"
+                className={`filter-chip ${activeSection === "overview" ? "active" : ""}`}
+                onClick={() => setActiveSection("overview")}
+              >
+                All ({properties.length})
+              </button>
+              <button
+                type="button"
+                className={`filter-chip ${activeSection === "buy" ? "active" : ""}`}
+                onClick={() => setActiveSection("buy")}
+              >
+                Buy ({properties.filter((p) => p.listing_type === "sale").length})
+              </button>
+              <button
+                type="button"
+                className={`filter-chip ${activeSection === "rent" ? "active" : ""}`}
+                onClick={() => setActiveSection("rent")}
+              >
+                Rent ({properties.filter((p) => p.listing_type === "rent").length})
+              </button>
+            </div>
+
+            <div className="search-group">
+              <div className="search-input-wrap">
+                <Search size={16} />
+                <input
+                  type="search"
+                  placeholder="Search by title, locality, city, or BHK..."
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  aria-label="Search properties"
+                />
+                {searchTerm && (
+                  <button
+                    type="button"
+                    className="clear-search-btn"
+                    onClick={() => setSearchTerm("")}
+                    aria-label="Clear search"
+                  >
+                    <X size={14} />
+                  </button>
+                )}
+              </div>
+
+              <select
+                className="city-select"
+                value={bhkFilter}
+                onChange={(e) => setBhkFilter(e.target.value)}
+                aria-label="Filter by BHK"
+              >
+                <option value="all">All BHK</option>
+                <option value="1 BHK">1 BHK</option>
+                <option value="2 BHK">2 BHK</option>
+                <option value="3 BHK">3 BHK</option>
+                <option value="4 BHK">4 BHK</option>
+              </select>
+
+              <select
+                className="city-select"
+                value={cityFilter}
+                onChange={(e) => setCityFilter(e.target.value)}
+                aria-label="Filter by city"
+              >
+                <option value="all">All Cities</option>
+                <option value="Pune">Pune</option>
+                <option value="Bengaluru">Bengaluru</option>
+                <option value="Mumbai">Mumbai</option>
+                <option value="Delhi NCR">Delhi NCR</option>
+                <option value="Hyderabad">Hyderabad</option>
+              </select>
+            </div>
+          </div>
+
+          {/* Property Cards Grid */}
+          {loading ? (
+            <div className="loading-state">
+              <RefreshCw size={32} className="spin-icon" />
+              <p>Loading properties...</p>
+            </div>
+          ) : filteredProperties.length === 0 ? (
+            <div className="empty-state">
+              <Building size={48} />
+              <h3>No matching properties found</h3>
+              <p>Try clearing your filters or switching between Buy and Rent.</p>
+              <button
+                type="button"
+                className="primary-btn compact"
+                onClick={() => {
+                  setCityFilter("all");
+                  setBhkFilter("all");
+                  setSearchTerm("");
+                }}
+              >
+                Reset Filters
+              </button>
+            </div>
+          ) : (
+            <div className="properties-grid">
+              {filteredProperties.map((property) => {
+                const isOwner =
+                  currentUser &&
+                  ((property.owner_email &&
+                    currentUser.email &&
+                    property.owner_email.toLowerCase() === currentUser.email.toLowerCase()) ||
+                    (property.owner_name &&
+                      currentUser.name &&
+                      property.owner_name.toLowerCase() === currentUser.name.toLowerCase()));
+
+                return (
+                  <PropertyCard
+                    key={property.id}
+                    property={property}
+                    isSaved={savedIds.includes(property.id)}
+                    onToggleSave={() => handleToggleSave(property.id)}
+                    onView={() => setSelectedProperty(property)}
+                    onToggleStatus={() => handleToggleStatus(property)}
+                    onDelete={() => handleDelete(property)}
+                    canManage={Boolean(isOwner)}
+                  />
+                );
+              })}
+            </div>
+          )}
+        </>
       )}
 
       {/* Add Property Modal */}
       {showAddModal && (
         <AddPropertyModal
           onClose={() => setShowAddModal(false)}
+          currentUser={currentUser}
+          defaultListingType={addDefaultListingType}
           onSuccess={(newProp) => {
             setShowAddModal(false);
             setProperties((prev) => [newProp, ...prev]);
-            setSuccessMsg(`Successfully listed "${newProp.title}"!`);
-            setTimeout(() => setSuccessMsg(""), 4000);
+            showToast(`Successfully listed "${newProp.title}"!`);
           }}
         />
       )}
@@ -415,16 +885,163 @@ export default function CustomerDashboard({ onAnalyzeAgreement }) {
           property={selectedProperty}
           onClose={() => setSelectedProperty(null)}
           onAnalyzeAgreement={onAnalyzeAgreement}
+          isSaved={savedIds.includes(selectedProperty.id)}
+          onToggleSave={handleToggleSave}
         />
       )}
     </div>
   );
 }
 
-function AddPropertyModal({ onClose, onSuccess }) {
+function PropertyCard({
+  property,
+  isSaved,
+  onToggleSave,
+  onView,
+  onToggleStatus,
+  onDelete,
+  canManage,
+}) {
+  const isRent = property.listing_type === "rent";
+  const amenities = Array.isArray(property.amenities) ? property.amenities : [];
+
+  return (
+    <div className={`property-card status-${property.status}`}>
+      <div className="card-media">
+        <img
+          src={property.image_url || SAMPLE_IMAGES[0]}
+          alt={property.title}
+          className="card-thumb"
+        />
+        <div className="card-overlay-top">
+          <span className={`badge-pill ${isRent ? "rent-pill" : "sale-pill"}`}>
+            {isRent ? "FOR RENT" : "FOR SALE"}
+          </span>
+          <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+            <span className={`badge-pill status-${property.status}`}>
+              {property.status.toUpperCase()}
+            </span>
+            <button
+              type="button"
+              className={`bookmark-overlay-btn ${isSaved ? "saved" : ""}`}
+              title={isSaved ? "Remove from Saved Properties" : "Save Property"}
+              aria-label={isSaved ? "Remove from Saved Properties" : "Save Property"}
+              onClick={onToggleSave}
+            >
+              <Bookmark size={15} fill={isSaved ? "currentColor" : "none"} />
+            </button>
+          </div>
+        </div>
+        <div className="card-overlay-bottom">
+          <strong className="card-price">
+            {formatPrice(property.price, property.listing_type)}
+          </strong>
+          {isRent && property.deposit > 0 && (
+            <span className="card-deposit">
+              Deposit: ₹{Number(property.deposit).toLocaleString("en-IN")}
+            </span>
+          )}
+        </div>
+      </div>
+
+      <div className="card-body">
+        <div className="card-meta">
+          <span className="bhk-badge">{property.bhk || "2 BHK"}</span>
+          <span className="type-badge">{property.property_type || "Apartment"}</span>
+          <span className="furnish-badge">{property.furnishing || "Semi"}</span>
+        </div>
+
+        <h3 className="card-title" title={property.title}>
+          {property.title}
+        </h3>
+
+        <div className="card-location">
+          <MapPin size={15} />
+          <span>
+            {property.locality}, {property.city}
+          </span>
+        </div>
+
+        <div className="card-specs">
+          <div className="spec-unit">
+            <Bed size={14} />
+            <span>{property.bhk}</span>
+          </div>
+          <div className="spec-unit">
+            <Bath size={14} />
+            <span>{property.bathrooms || 1} Bath</span>
+          </div>
+          {property.area_sqft > 0 && (
+            <div className="spec-unit">
+              <Layers size={14} />
+              <span>{property.area_sqft} sq.ft</span>
+            </div>
+          )}
+        </div>
+
+        {amenities.length > 0 && (
+          <div className="card-amenities">
+            {amenities.slice(0, 3).map((a, i) => (
+              <span key={i} className="mini-amenity-tag">
+                {a}
+              </span>
+            ))}
+            {amenities.length > 3 && (
+              <span className="mini-amenity-more">+{amenities.length - 3}</span>
+            )}
+          </div>
+        )}
+
+        <div className="card-footer">
+          <div className="owner-mini">
+            <small>Owner:</small>
+            <b>{property.owner_name}</b>
+          </div>
+          <div className="card-actions">
+            <button
+              type="button"
+              className="action-icon-btn view"
+              title="View Full Details"
+              onClick={onView}
+            >
+              <Eye size={16} />
+            </button>
+            {canManage && onToggleStatus && (
+              <button
+                type="button"
+                className={`action-icon-btn status-btn ${property.status}`}
+                title={
+                  property.status === "available"
+                    ? `Mark as ${isRent ? "Rented" : "Sold"}`
+                    : "Mark as Available"
+                }
+                onClick={onToggleStatus}
+              >
+                <CheckCircle2 size={16} />
+              </button>
+            )}
+            {canManage && onDelete && (
+              <button
+                type="button"
+                className="action-icon-btn delete"
+                title="Delete Property"
+                onClick={onDelete}
+              >
+                <Trash2 size={16} />
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AddPropertyModal({ onClose, onSuccess, currentUser, defaultListingType = "rent" }) {
+  const formId = useId();
   const [formData, setFormData] = useState({
     title: "",
-    listing_type: "rent",
+    listing_type: defaultListingType,
     property_type: "Apartment",
     city: "Pune",
     locality: "",
@@ -444,9 +1061,9 @@ function AddPropertyModal({ onClose, onSuccess }) {
     preferred_tenant: "Any",
     amenities: ["Lift", "Power Backup", "24x7 Security"],
     description: "",
-    owner_name: "",
-    owner_phone: "",
-    owner_email: "",
+    owner_name: currentUser?.name || "",
+    owner_phone: currentUser?.phone || "",
+    owner_email: currentUser?.email || "",
     image_url: SAMPLE_IMAGES[0]
   });
 
@@ -517,7 +1134,7 @@ function AddPropertyModal({ onClose, onSuccess }) {
             <h2>Add New Property Listing</h2>
             <p>Enter complete property details for potential buyers, tenants, and brokers.</p>
           </div>
-          <button className="modal-close-btn" onClick={onClose}>
+          <button type="button" className="modal-close-btn" onClick={onClose} aria-label="Close">
             <X size={20} />
           </button>
         </div>
@@ -530,7 +1147,6 @@ function AddPropertyModal({ onClose, onSuccess }) {
         )}
 
         <form onSubmit={handleSubmit} className="property-form">
-          {/* Section 1: Intent & Basic */}
           <div className="form-section">
             <div className="form-section-title">
               <span>1</span> Listing Intent & Property Type
@@ -558,8 +1174,9 @@ function AddPropertyModal({ onClose, onSuccess }) {
               </div>
 
               <div className="form-group flex-1">
-                <label>Property Type *</label>
+                <label htmlFor={`${formId}-type`}>Property Type *</label>
                 <select
+                  id={`${formId}-type`}
                   value={formData.property_type}
                   onChange={(e) => handleChange("property_type", e.target.value)}
                 >
@@ -574,8 +1191,9 @@ function AddPropertyModal({ onClose, onSuccess }) {
             </div>
 
             <div className="form-group">
-              <label>Property Title *</label>
+              <label htmlFor={`${formId}-title`}>Property Title *</label>
               <input
+                id={`${formId}-title`}
                 type="text"
                 placeholder="e.g. Spacious 3 BHK Luxury Apartment with Balcony"
                 value={formData.title}
@@ -585,7 +1203,6 @@ function AddPropertyModal({ onClose, onSuccess }) {
             </div>
           </div>
 
-          {/* Section 2: Location */}
           <div className="form-section">
             <div className="form-section-title">
               <span>2</span> Location & Address
@@ -593,8 +1210,9 @@ function AddPropertyModal({ onClose, onSuccess }) {
 
             <div className="form-row">
               <div className="form-group flex-1">
-                <label>City *</label>
+                <label htmlFor={`${formId}-city`}>City *</label>
                 <select
+                  id={`${formId}-city`}
                   value={formData.city}
                   onChange={(e) => handleChange("city", e.target.value)}
                 >
@@ -610,8 +1228,9 @@ function AddPropertyModal({ onClose, onSuccess }) {
               </div>
 
               <div className="form-group flex-1">
-                <label>Locality / Area / Sector *</label>
+                <label htmlFor={`${formId}-locality`}>Locality / Area / Sector *</label>
                 <input
+                  id={`${formId}-locality`}
                   type="text"
                   placeholder="e.g. Koregaon Park or Wakad"
                   value={formData.locality}
@@ -621,8 +1240,9 @@ function AddPropertyModal({ onClose, onSuccess }) {
               </div>
 
               <div className="form-group flex-1">
-                <label>Pincode</label>
+                <label htmlFor={`${formId}-pincode`}>Pincode</label>
                 <input
+                  id={`${formId}-pincode`}
                   type="text"
                   placeholder="e.g. 411001"
                   value={formData.pincode}
@@ -632,8 +1252,9 @@ function AddPropertyModal({ onClose, onSuccess }) {
             </div>
 
             <div className="form-group">
-              <label>Full Address & Landmark</label>
+              <label htmlFor={`${formId}-address`}>Full Address & Landmark</label>
               <input
+                id={`${formId}-address`}
                 type="text"
                 placeholder="e.g. Flat 902, Tower B, Silver Woods, Lane 5, near Metro Station"
                 value={formData.address}
@@ -642,7 +1263,6 @@ function AddPropertyModal({ onClose, onSuccess }) {
             </div>
           </div>
 
-          {/* Section 3: Financials */}
           <div className="form-section">
             <div className="form-section-title">
               <span>3</span> Pricing & Financials
@@ -650,8 +1270,11 @@ function AddPropertyModal({ onClose, onSuccess }) {
 
             <div className="form-row">
               <div className="form-group flex-1">
-                <label>{isRent ? "Monthly Rent (₹) *" : "Total Selling Price (₹) *"}</label>
+                <label htmlFor={`${formId}-price`}>
+                  {isRent ? "Monthly Rent (₹) *" : "Total Selling Price (₹) *"}
+                </label>
                 <input
+                  id={`${formId}-price`}
                   type="number"
                   placeholder={isRent ? "e.g. 35000" : "e.g. 15000000"}
                   value={formData.price}
@@ -662,8 +1285,9 @@ function AddPropertyModal({ onClose, onSuccess }) {
 
               {isRent && (
                 <div className="form-group flex-1">
-                  <label>Security Deposit (₹)</label>
+                  <label htmlFor={`${formId}-deposit`}>Security Deposit (₹)</label>
                   <input
+                    id={`${formId}-deposit`}
                     type="number"
                     placeholder="e.g. 80000"
                     value={formData.deposit}
@@ -673,8 +1297,9 @@ function AddPropertyModal({ onClose, onSuccess }) {
               )}
 
               <div className="form-group flex-1">
-                <label>Maintenance Charge (₹/mo)</label>
+                <label htmlFor={`${formId}-maintenance`}>Maintenance Charge (₹/mo)</label>
                 <input
+                  id={`${formId}-maintenance`}
                   type="number"
                   placeholder="e.g. 2500"
                   value={formData.maintenance}
@@ -684,7 +1309,6 @@ function AddPropertyModal({ onClose, onSuccess }) {
             </div>
           </div>
 
-          {/* Section 4: Specifications & Furnishing */}
           <div className="form-section">
             <div className="form-section-title">
               <span>4</span> Property Specifications
@@ -692,8 +1316,9 @@ function AddPropertyModal({ onClose, onSuccess }) {
 
             <div className="form-row">
               <div className="form-group flex-1">
-                <label>Configuration (BHK)</label>
+                <label htmlFor={`${formId}-bhk`}>Configuration (BHK)</label>
                 <select
+                  id={`${formId}-bhk`}
                   value={formData.bhk}
                   onChange={(e) => handleChange("bhk", e.target.value)}
                 >
@@ -707,8 +1332,9 @@ function AddPropertyModal({ onClose, onSuccess }) {
               </div>
 
               <div className="form-group flex-1">
-                <label>Bathrooms</label>
+                <label htmlFor={`${formId}-bath`}>Bathrooms</label>
                 <input
+                  id={`${formId}-bath`}
                   type="number"
                   value={formData.bathrooms}
                   onChange={(e) => handleChange("bathrooms", e.target.value)}
@@ -718,8 +1344,9 @@ function AddPropertyModal({ onClose, onSuccess }) {
               </div>
 
               <div className="form-group flex-1">
-                <label>Balconies</label>
+                <label htmlFor={`${formId}-balc`}>Balconies</label>
                 <input
+                  id={`${formId}-balc`}
                   type="number"
                   value={formData.balconies}
                   onChange={(e) => handleChange("balconies", e.target.value)}
@@ -729,8 +1356,9 @@ function AddPropertyModal({ onClose, onSuccess }) {
               </div>
 
               <div className="form-group flex-1">
-                <label>Super Area (sq. ft)</label>
+                <label htmlFor={`${formId}-area`}>Super Area (sq. ft)</label>
                 <input
+                  id={`${formId}-area`}
                   type="number"
                   placeholder="e.g. 1250"
                   value={formData.area_sqft}
@@ -741,8 +1369,9 @@ function AddPropertyModal({ onClose, onSuccess }) {
 
             <div className="form-row">
               <div className="form-group flex-1">
-                <label>Furnishing Status</label>
+                <label htmlFor={`${formId}-furnish`}>Furnishing Status</label>
                 <select
+                  id={`${formId}-furnish`}
                   value={formData.furnishing}
                   onChange={(e) => handleChange("furnishing", e.target.value)}
                 >
@@ -753,8 +1382,9 @@ function AddPropertyModal({ onClose, onSuccess }) {
               </div>
 
               <div className="form-group flex-1">
-                <label>Floor Position</label>
+                <label htmlFor={`${formId}-floor`}>Floor Position</label>
                 <input
+                  id={`${formId}-floor`}
                   type="text"
                   placeholder="e.g. 4th of 12 Floors"
                   value={formData.floor}
@@ -763,8 +1393,9 @@ function AddPropertyModal({ onClose, onSuccess }) {
               </div>
 
               <div className="form-group flex-1">
-                <label>Parking Facility</label>
+                <label htmlFor={`${formId}-parking`}>Parking Facility</label>
                 <select
+                  id={`${formId}-parking`}
                   value={formData.parking}
                   onChange={(e) => handleChange("parking", e.target.value)}
                 >
@@ -777,8 +1408,9 @@ function AddPropertyModal({ onClose, onSuccess }) {
               </div>
 
               <div className="form-group flex-1">
-                <label>Available From</label>
+                <label htmlFor={`${formId}-avail`}>Available From</label>
                 <input
+                  id={`${formId}-avail`}
                   type="text"
                   placeholder="e.g. Immediate or 1st Next Month"
                   value={formData.available_from}
@@ -789,8 +1421,9 @@ function AddPropertyModal({ onClose, onSuccess }) {
 
             {isRent && (
               <div className="form-group">
-                <label>Preferred Tenants</label>
+                <label htmlFor={`${formId}-tenant`}>Preferred Tenants</label>
                 <select
+                  id={`${formId}-tenant`}
                   value={formData.preferred_tenant}
                   onChange={(e) => handleChange("preferred_tenant", e.target.value)}
                 >
@@ -824,8 +1457,9 @@ function AddPropertyModal({ onClose, onSuccess }) {
             </div>
 
             <div className="form-group">
-              <label>Detailed Description</label>
+              <label htmlFor={`${formId}-desc`}>Detailed Description</label>
               <textarea
+                id={`${formId}-desc`}
                 rows={3}
                 placeholder="Describe key highlights, neighborhood vibe, nearby transit, sunlight, water supply, and society rules..."
                 value={formData.description}
@@ -834,7 +1468,6 @@ function AddPropertyModal({ onClose, onSuccess }) {
             </div>
           </div>
 
-          {/* Section 5: Owner Contact & Photos */}
           <div className="form-section">
             <div className="form-section-title">
               <span>5</span> Owner Contact & Showcase Image
@@ -842,8 +1475,9 @@ function AddPropertyModal({ onClose, onSuccess }) {
 
             <div className="form-row">
               <div className="form-group flex-1">
-                <label>Owner / Lister Name *</label>
+                <label htmlFor={`${formId}-oname`}>Owner / Lister Name *</label>
                 <input
+                  id={`${formId}-oname`}
                   type="text"
                   placeholder="e.g. Priya Sharma"
                   value={formData.owner_name}
@@ -853,8 +1487,9 @@ function AddPropertyModal({ onClose, onSuccess }) {
               </div>
 
               <div className="form-group flex-1">
-                <label>Contact Phone Number *</label>
+                <label htmlFor={`${formId}-ophone`}>Contact Phone Number *</label>
                 <input
+                  id={`${formId}-ophone`}
                   type="tel"
                   placeholder="e.g. +91 98765 43210"
                   value={formData.owner_phone}
@@ -864,8 +1499,9 @@ function AddPropertyModal({ onClose, onSuccess }) {
               </div>
 
               <div className="form-group flex-1">
-                <label>Email Address</label>
+                <label htmlFor={`${formId}-oemail`}>Email Address</label>
                 <input
+                  id={`${formId}-oemail`}
                   type="email"
                   placeholder="e.g. priya@example.com"
                   value={formData.owner_email}
@@ -875,8 +1511,9 @@ function AddPropertyModal({ onClose, onSuccess }) {
             </div>
 
             <div className="form-group">
-              <label>Property Photo URL</label>
+              <label htmlFor={`${formId}-img`}>Property Photo URL</label>
               <input
+                id={`${formId}-img`}
                 type="url"
                 placeholder="Image URL or choose a preset below"
                 value={formData.image_url}

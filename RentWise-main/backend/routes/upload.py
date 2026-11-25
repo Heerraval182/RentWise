@@ -1,18 +1,26 @@
+from typing import Optional
 from uuid import uuid4
 
-from fastapi import APIRouter, UploadFile, File, HTTPException, Form
+from fastapi import APIRouter, UploadFile, File, HTTPException, Form, Header
 from pydantic import BaseModel, Field
 from services.document_parser import extract_text
 from services.document_store import get_document, save_document
 from services.analyzer import analyze_document, answer_question, explain_clause, build_checklist, compare_documents
+from routes.auth import get_optional_user
+from services.user_store import save_user_agreement
 
 router = APIRouter()
 
 ALLOWED = {".pdf", ".docx"}
-MAX_SIZE = 10 * 1024 * 1024
+# File upload size limit removed (set to None for unlimited)
+MAX_SIZE = None
 
 @router.post("/upload")
-async def upload_document(file: UploadFile = File(...), location: str = Form(default="")):
+async def upload_document(
+    file: UploadFile = File(...),
+    location: str = Form(default=""),
+    authorization: Optional[str] = Header(None),
+):
     filename = file.filename or ""
     extension = "." + filename.lower().split(".")[-1] if "." in filename else ""
 
@@ -23,8 +31,8 @@ async def upload_document(file: UploadFile = File(...), location: str = Form(def
         )
 
     data = await file.read()
-    if len(data) > MAX_SIZE:
-        raise HTTPException(status_code=400, detail="File is larger than the 10 MB limit.")
+    if MAX_SIZE and len(data) > MAX_SIZE:
+        raise HTTPException(status_code=400, detail=f"File is larger than the {MAX_SIZE // (1024 * 1024)} MB limit.")
 
     try:
         text, scanned = extract_text(data, extension)
@@ -46,6 +54,15 @@ async def upload_document(file: UploadFile = File(...), location: str = Form(def
     result["filename"] = filename
     result["scanned"] = scanned
     result["document_id"] = document_id
+    result["location"] = location
+
+    user = get_optional_user(authorization)
+    if user:
+        save_user_agreement(user["id"], document_id, filename, location, result)
+        result["saved_to_account"] = True
+    else:
+        result["saved_to_account"] = False
+
     return result
 
 
@@ -82,8 +99,8 @@ async def compare(document_id: str, file: UploadFile = File(...)):
     if extension not in ALLOWED:
         raise HTTPException(status_code=400, detail="That file type isn't supported. Please upload a PDF or DOCX agreement.")
     data = await file.read()
-    if len(data) > MAX_SIZE:
-        raise HTTPException(status_code=400, detail="File is larger than the 10 MB limit.")
+    if MAX_SIZE and len(data) > MAX_SIZE:
+        raise HTTPException(status_code=400, detail=f"File is larger than the {MAX_SIZE // (1024 * 1024)} MB limit.")
     try:
         second_text, _ = extract_text(data, extension)
     except Exception:

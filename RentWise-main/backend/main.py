@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from routes.upload import router as upload_router
 from routes.properties import router as properties_router
+from routes.auth import router as auth_router
 
 app = FastAPI(title="RentWise API", version="0.1.0")
 
@@ -15,6 +16,7 @@ app.add_middleware(
 
 app.include_router(upload_router, prefix="/api")
 app.include_router(properties_router, prefix="/api")
+app.include_router(auth_router, prefix="/api")
 
 @app.get("/api/health")
 def health():

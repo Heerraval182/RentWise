@@ -1,14 +1,25 @@
-import React, { useState } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { createRoot } from "react-dom/client";
 import {
   ArrowRight, ArrowLeft, Check, FileText, Home, Search, ShieldCheck,
   UploadCloud, Sparkles, Clock3, AlertTriangle, Wrench, DoorOpen,
   CircleDollarSign, Lightbulb, Lock, X, LoaderCircle, MessageCircle, Send,
-  Gauge, Building, Briefcase, Plus, Users, Key, Tag
+  Gauge, Building, Briefcase, Plus, Users, Key, Tag, LogOut, ChevronDown,
+  AlertCircle, LogIn, User, Bookmark
 } from "lucide-react";
-import { askAgreement, uploadAgreement, explainClause, getChecklist, compareAgreement } from "./services/api";
+import {
+  askAgreement,
+  uploadAgreement,
+  explainClause,
+  getChecklist,
+  compareAgreement,
+  getCurrentUser,
+  logoutUser,
+  saveAgreementToAccount,
+} from "./services/api";
 import CustomerDashboard from "./components/CustomerDashboard";
 import BrokerDashboard from "./components/BrokerDashboard";
+import AuthModal, { AuthPanel } from "./components/AuthModal";
 import "./styles.css";
 
 const categories = [
@@ -27,10 +38,125 @@ const roadmapFeatures = [
 ];
 
 function App() {
-  const [page, setPage] = useState("home"); // "home" | "analyzer" | "results" | "customer" | "broker"
+  const [user, setUser] = useState(() => {
+    try {
+      const saved = localStorage.getItem("rentwise_user");
+      return saved ? JSON.parse(saved) : null;
+    } catch {
+      return null;
+    }
+  });
+  const [token, setToken] = useState(() => localStorage.getItem("rentwise_token") || "");
+  const [page, setPage] = useState(() => {
+    try {
+      const saved = localStorage.getItem("rentwise_user");
+      const tok = localStorage.getItem("rentwise_token");
+      if (saved && tok) {
+        const parsed = JSON.parse(saved);
+        return parsed?.role === "broker" ? "broker" : "customer";
+      }
+    } catch {}
+    return "auth"; // Always show Login / Registration first when unauthenticated
+  }); // "auth" | "analyzer" | "results" | "customer" | "broker"
+  const [customerSection, setCustomerSection] = useState("overview"); // "overview" | "buy" | "rent" | "account"
   const [result, setResult] = useState(null);
   const [error, setError] = useState("");
   const [initialLocation, setInitialLocation] = useState("");
+  const [landingAuthConfig, setLandingAuthConfig] = useState({
+    mode: "login",
+    targetRole: "customer",
+    contextMessage: "",
+  });
+
+  const [authModal, setAuthModal] = useState({
+    isOpen: false,
+    mode: "login",
+    targetRole: "customer",
+    pendingNav: null,
+    pendingCustomerSection: "overview",
+    contextMessage: "",
+  });
+
+  // Verify stored session on startup
+  useEffect(() => {
+    if (token) {
+      getCurrentUser(token).then((verifiedUser) => {
+        if (verifiedUser) {
+          setUser(verifiedUser);
+          localStorage.setItem("rentwise_user", JSON.stringify(verifiedUser));
+        } else {
+          setUser(null);
+          setToken("");
+          localStorage.removeItem("rentwise_user");
+          localStorage.removeItem("rentwise_token");
+          setPage((prev) => (prev === "customer" || prev === "broker" ? "auth" : prev));
+        }
+      });
+    }
+  }, []);
+
+  const openAuthModal = (
+    mode = "login",
+    targetRole = "customer",
+    pendingNav = null,
+    contextMessage = "",
+    pendingCustomerSection = "overview"
+  ) => {
+    setAuthModal({
+      isOpen: true,
+      mode,
+      targetRole: targetRole || "customer",
+      pendingNav,
+      pendingCustomerSection,
+      contextMessage,
+    });
+  };
+
+  const handleAuthSuccess = async (loggedInUser, authToken) => {
+    setUser(loggedInUser);
+    setToken(authToken);
+    localStorage.setItem("rentwise_user", JSON.stringify(loggedInUser));
+    localStorage.setItem("rentwise_token", authToken);
+
+    // If user just analyzed an agreement as a guest, link & save it to their account now
+    if (result?.document_id && !result.saved_to_account) {
+      try {
+        await saveAgreementToAccount(authToken, {
+          document_id: result.document_id,
+          filename: result.filename || "Rental Agreement",
+          location: result.location || initialLocation || "",
+          analysis: result,
+        });
+        setResult((prev) => (prev ? { ...prev, saved_to_account: true } : prev));
+      } catch {
+        // Non-blocking
+      }
+    }
+
+    if (authModal.pendingNav) {
+      if (authModal.pendingNav === "customer") {
+        setCustomerSection(authModal.pendingCustomerSection || "overview");
+      }
+      navTo(authModal.pendingNav);
+    } else if (loggedInUser.role === "broker") {
+      navTo("broker");
+    } else {
+      setCustomerSection(authModal.pendingCustomerSection || "overview");
+      navTo("customer");
+    }
+  };
+
+  const handleLogout = async () => {
+    if (token) {
+      await logoutUser(token);
+    }
+    setUser(null);
+    setToken("");
+    localStorage.removeItem("rentwise_user");
+    localStorage.removeItem("rentwise_token");
+    setLandingAuthConfig({ mode: "login", targetRole: "customer", contextMessage: "" });
+    setPage("auth");
+  };
 
   const goAnalyzer = (location = "") => {
     setError("");
@@ -45,34 +171,137 @@ function App() {
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
+  const navToProtected = (dest, section = "overview") => {
+    if (dest === "auth" || dest === "home") {
+      if (!user) {
+        navTo("auth");
+      } else {
+        navTo(user.role === "broker" ? "broker" : "customer");
+      }
+      return;
+    }
+    if (dest === "customer") {
+      if (!user) {
+        setLandingAuthConfig({
+          mode: "login",
+          targetRole: "customer",
+          contextMessage: "Please login or register with User Login before opening the Customer Dashboard.",
+        });
+        navTo("auth");
+        return;
+      }
+      if (user.role !== "customer") {
+        openAuthModal(
+          "login",
+          "customer",
+          "customer",
+          "You are currently signed in as a Broker. Switch to a Customer / General User account to open the Customer Dashboard.",
+          section
+        );
+        return;
+      }
+      setCustomerSection(section);
+    } else if (dest === "broker") {
+      if (!user) {
+        setLandingAuthConfig({
+          mode: "login",
+          targetRole: "broker",
+          contextMessage: "Please login or register with Broker Login before opening the Broker Portal.",
+        });
+        navTo("auth");
+        return;
+      }
+      if (user.role !== "broker") {
+        openAuthModal(
+          "login",
+          "broker",
+          "broker",
+          "You are currently signed in as a Customer. Switch to a Licensed Broker account to open the Broker Portal."
+        );
+        return;
+      }
+    }
+    navTo(dest);
+  };
+
+  const canShowCustomerDashboard = page === "customer" && user && user.role === "customer";
+  const canShowBrokerDashboard = page === "broker" && user && user.role === "broker";
+  const showAuthGate =
+    page === "auth" ||
+    (page === "customer" && (!user || user.role !== "customer")) ||
+    (page === "broker" && (!user || user.role !== "broker"));
+
   return (
     <div className="app">
-      <Header activePage={page} onNav={navTo} onStart={() => goAnalyzer()} />
+      <Header
+        activePage={showAuthGate ? "auth" : page}
+        onNav={(dest, section) => navToProtected(dest, section)}
+        onStart={() => goAnalyzer()}
+        user={user}
+        onUserLoginClick={() => {
+          setLandingAuthConfig({ mode: "login", targetRole: "customer", contextMessage: "" });
+          navTo("auth");
+        }}
+        onRegisterClick={() => {
+          setLandingAuthConfig({ mode: "signup", targetRole: "customer", contextMessage: "" });
+          navTo("auth");
+        }}
+        onLogout={handleLogout}
+        onSwitchAccount={() =>
+          openAuthModal("login", user?.role === "customer" ? "broker" : "customer")
+        }
+      />
 
-      {page === "home" && (
-        <HomePage
-          onStart={() => goAnalyzer()}
-          onCustomer={() => navTo("customer")}
-          onBroker={() => navTo("broker")}
+      {showAuthGate && (
+        <AuthLandingPage
+          initialMode={landingAuthConfig.mode}
+          targetRole={landingAuthConfig.targetRole}
+          contextMessage={landingAuthConfig.contextMessage}
+          onSuccess={handleAuthSuccess}
+          onAnalyzeWithoutLogin={() => goAnalyzer()}
         />
       )}
 
-      {page === "customer" && (
+      {canShowCustomerDashboard && (
         <CustomerDashboard
           onAnalyzeAgreement={(city) => goAnalyzer(city)}
+          onOpenAgreement={(analysis) => {
+            setResult(analysis);
+            navTo("results");
+          }}
+          currentUser={user}
+          authToken={token}
+          initialSection={customerSection}
+          onUserUpdated={(updatedUser) => {
+            setUser(updatedUser);
+            localStorage.setItem("rentwise_user", JSON.stringify(updatedUser));
+          }}
+          onRequireLogin={() => openAuthModal("login", "customer", "customer")}
         />
       )}
 
-      {page === "broker" && (
+      {canShowBrokerDashboard && (
         <BrokerDashboard
           onAnalyzeAgreement={(city) => goAnalyzer(city)}
+          currentUser={user}
+          onRequireLogin={() => openAuthModal("login", "broker", "broker")}
         />
       )}
 
       {page === "analyzer" && (
         <AnalyzerPage
           initialLocation={initialLocation}
-          onBack={() => navTo("home")}
+          token={token}
+          user={user}
+          onBack={() => navTo(user ? (user.role === "broker" ? "broker" : "customer") : "auth")}
+          onLoginToBrowse={() =>
+            openAuthModal(
+              "login",
+              "customer",
+              "customer",
+              "Already analyzed your agreement? Sign in or register with User Login to explore properties to buy or rent."
+            )
+          }
           onResult={(data) => {
             setResult(data);
             setPage("results");
@@ -85,18 +314,72 @@ function App() {
       {page === "results" && (
         <ResultsPage
           result={result}
+          user={user}
           onBack={() => setPage("analyzer")}
-          onHome={() => navTo("home")}
+          onHome={() => navTo(user ? (user.role === "broker" ? "broker" : "customer") : "auth")}
+          onCustomerDashboard={(section = "overview") => navToProtected("customer", section)}
+          onLoginAndSave={() =>
+            openAuthModal(
+              "login",
+              "customer",
+              "customer",
+              "Sign in or register with User Login to save this analyzed agreement to My Account and explore properties to buy or rent.",
+              "account"
+            )
+          }
         />
       )}
+
+      {/* Global Auth Modal (used when switching accounts or logging in from Analyzer / Results) */}
+      <AuthModal
+        isOpen={authModal.isOpen}
+        initialMode={authModal.mode}
+        targetRole={authModal.targetRole}
+        contextMessage={authModal.contextMessage}
+        onClose={() => setAuthModal((prev) => ({ ...prev, isOpen: false }))}
+        onSuccess={handleAuthSuccess}
+      />
     </div>
   );
 }
 
-function Header({ activePage, onNav, onStart }) {
+function Header({
+  activePage,
+  onNav,
+  onStart,
+  user,
+  onUserLoginClick,
+  onRegisterClick,
+  onLogout,
+  onSwitchAccount,
+}) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const dropdownRef = useRef(null);
+
+  useEffect(() => {
+    function handleClickOutside(e) {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target)) {
+        setMenuOpen(false);
+      }
+    }
+    if (menuOpen) {
+      document.addEventListener("mousedown", handleClickOutside);
+    }
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [menuOpen]);
+
+  const initials = user?.name
+    ? user.name
+        .split(" ")
+        .map((n) => n[0])
+        .join("")
+        .slice(0, 2)
+        .toUpperCase()
+    : "U";
+
   return (
     <header className="nav">
-      <button className="brand" onClick={() => onNav("home")}>
+      <button className="brand" onClick={() => onNav("auth")}>
         <span className="brand-mark">
           <FileText size={18} />
           <Check size={12} />
@@ -107,33 +390,132 @@ function Header({ activePage, onNav, onStart }) {
       </button>
 
       <nav className="main-nav-links">
-        <button
-          className={`nav-link-btn ${activePage === "home" ? "active" : ""}`}
-          onClick={() => onNav("home")}
-        >
-          Home
-        </button>
-        <button
-          className={`nav-link-btn ${activePage === "customer" ? "active" : ""}`}
-          onClick={() => onNav("customer")}
-        >
-          <Building size={15} /> Customer Portal
-        </button>
-        <button
-          className={`nav-link-btn ${activePage === "broker" ? "active" : ""}`}
-          onClick={() => onNav("broker")}
-        >
-          <Briefcase size={15} /> Broker Portal
-        </button>
+        {!user && (
+          <button
+            className={`nav-link-btn ${activePage === "auth" ? "active" : ""}`}
+            onClick={() => onNav("auth")}
+          >
+            <LogIn size={15} /> Login / Register
+          </button>
+        )}
         <button
           className={`nav-link-btn ${activePage === "analyzer" || activePage === "results" ? "active" : ""}`}
-          onClick={() => onNav("analyzer")}
+          onClick={onStart}
         >
-          <FileText size={15} /> Agreement Analyzer
+          <FileText size={15} /> Analyze Agreement
         </button>
+        {user?.role === "customer" && (
+          <button
+            className={`nav-link-btn ${activePage === "customer" ? "active" : ""}`}
+            onClick={() => onNav("customer")}
+          >
+            <Building size={15} /> Customer Dashboard
+          </button>
+        )}
+        {user?.role === "broker" && (
+          <button
+            className={`nav-link-btn ${activePage === "broker" ? "active" : ""}`}
+            onClick={() => onNav("broker")}
+          >
+            <Briefcase size={15} /> Broker Portal
+          </button>
+        )}
       </nav>
 
       <div className="nav-actions">
+        {user ? (
+          <div className="user-menu-wrapper" ref={dropdownRef}>
+            <button
+              className="user-profile-badge"
+              onClick={() => setMenuOpen(!menuOpen)}
+              title="Click to view account menu"
+            >
+              <div className="user-avatar-circle">{initials}</div>
+              <div className="user-info-brief">
+                <span className="user-name-text">{user.name}</span>
+                <span className={`user-role-tag ${user.role}`}>
+                  {user.role === "customer" ? "Customer" : "Broker"}
+                </span>
+              </div>
+              <ChevronDown size={14} color="#627d98" />
+            </button>
+
+            {menuOpen && (
+              <div className="user-dropdown-panel">
+                <div className="user-dropdown-header">
+                  <b>{user.name}</b>
+                  <span>{user.email}</span>
+                  {user.agency_name && (
+                    <div className="user-dropdown-agency">🏢 {user.agency_name}</div>
+                  )}
+                </div>
+
+                {user.role === "customer" ? (
+                  <>
+                    <button
+                      className="user-dropdown-action"
+                      onClick={() => {
+                        setMenuOpen(false);
+                        onNav("customer", "overview");
+                      }}
+                    >
+                      <Building size={15} /> Customer Dashboard
+                    </button>
+                    <button
+                      className="user-dropdown-action"
+                      onClick={() => {
+                        setMenuOpen(false);
+                        onNav("customer", "account");
+                      }}
+                    >
+                      <User size={15} /> My Account & Saved
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    className="user-dropdown-action"
+                    onClick={() => {
+                      setMenuOpen(false);
+                      onNav("broker");
+                    }}
+                  >
+                    <Briefcase size={15} /> Go to Broker Portal
+                  </button>
+                )}
+
+                <button
+                  className="user-dropdown-action"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    onSwitchAccount();
+                  }}
+                >
+                  <Users size={15} /> Switch / Change Account
+                </button>
+
+                <button
+                  className="user-dropdown-action logout"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    onLogout();
+                  }}
+                >
+                  <LogOut size={15} /> Sign Out
+                </button>
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="nav-auth-group">
+            <button className="nav-login-btn" onClick={onUserLoginClick}>
+              <LogIn size={14} /> Login
+            </button>
+            <button className="nav-signup-btn" onClick={onRegisterClick}>
+              <User size={14} /> Register
+            </button>
+          </div>
+        )}
+
         <button className="nav-cta" onClick={onStart}>
           Analyze Agreement <ArrowRight size={16} />
         </button>
@@ -142,185 +524,82 @@ function Header({ activePage, onNav, onStart }) {
   );
 }
 
-function HomePage({ onStart, onCustomer, onBroker }) {
+function AuthLandingPage({
+  initialMode,
+  targetRole,
+  contextMessage,
+  onSuccess,
+  onAnalyzeWithoutLogin,
+}) {
   return (
     <>
-      <main>
-        <section className="hero">
-          <div className="hero-copy">
+      <main className="auth-landing-page">
+        <div className="auth-landing-grid">
+          <section className="auth-landing-info">
             <div className="eyebrow">
-              <Sparkles size={15} /> AI-Powered Real Estate & Rental Agreement Platform
+              <ShieldCheck size={15} /> RentWise – Secure Authentication
             </div>
             <h1>
-              Intelligent <em>Rental & Property</em> Ecosystem
+              Login or Register before accessing <em>Dashboards</em>
             </h1>
-            <p>
-              RentWise connects property owners, prospective tenants, buyers, and brokers. List complete property details for rent or sale, instantly match client requirements, and audit legal agreements for hidden risks.
+            <p className="auth-landing-sub">
+              Welcome to your rental and property platform. Choose <b>Customer / General User</b> to buy or rent homes and manage saved agreements, or <b>Licensed Broker</b> to match client leads.
             </p>
-            <div className="hero-actions">
-              <button className="primary-btn" onClick={onCustomer}>
-                <Building size={17} /> Customer Portal (List Property)
-              </button>
-              <button className="secondary-btn" onClick={onBroker}>
-                <Briefcase size={17} /> Broker Matcher
-              </button>
-              <button className="nav-cta-subtle" onClick={onStart}>
-                Analyze Agreement <ArrowRight size={16} />
-              </button>
-            </div>
-            <div className="trust-line">
-              <ShieldCheck size={16} /> Verified properties • Instant requirement matching • Document intelligence
-            </div>
-          </div>
 
-          <div className="hero-visual">
-            <div className="glow"></div>
-            <div className="doc-preview">
-              <div className="doc-top">
-                <span className="file-icon">
-                  <Building size={20} />
-                </span>
+            <div className="auth-guest-card">
+              <div className="auth-guest-icon">
+                <FileText size={22} />
+              </div>
+              <div className="auth-guest-copy">
+                <span className="portal-tag">NO ACCOUNT NEEDED</span>
+                <h2>Analyze Rental Agreement First?</h2>
+                <p>
+                  You do not need a separate account just to analyze a rental agreement. Upload any PDF or DOCX to check clauses and risks, then sign in later if you want to buy or rent.
+                </p>
+              </div>
+              <button
+                type="button"
+                className="primary-btn"
+                onClick={onAnalyzeWithoutLogin}
+              >
+                Analyze Agreement (No Login Needed) <ArrowRight size={16} />
+              </button>
+            </div>
+
+            <div className="auth-portal-highlights">
+              <div className="auth-highlight-item">
+                <Building size={18} />
                 <div>
-                  <b>Luxury 3 BHK High-Rise Flat</b>
-                  <small>Koregaon Park, Pune • For Rent</small>
+                  <b>Customer Dashboard</b>
+                  <span>Analyze Agreement, Buy a Property, Rent a Property, and My Account.</span>
                 </div>
-                <Check className="ok" size={19} />
               </div>
-              <div className="doc-lines">
-                <i></i>
-                <i></i>
-                <i className="short"></i>
-                <i></i>
-              </div>
-              <div className="detected">
-                <div className="result-pill">
-                  <Check size={13} /> ₹45,000 / month
-                </div>
-                <div className="result-pill">
-                  <Check size={13} /> 97% Match Score
-                </div>
-                <div className="result-pill">
-                  <Check size={13} /> Fully Furnished
-                </div>
-                <div className="result-pill">
-                  <Check size={13} /> Verified Owner
+              <div className="auth-highlight-item">
+                <Briefcase size={18} />
+                <div>
+                  <b>Broker Dashboard</b>
+                  <span>Client requirement matching, compatibility scores, and lead management.</span>
                 </div>
               </div>
             </div>
-            <div className="floating-card card-one">
-              <Sparkles size={16} />
-              <span>
-                <b>Instant</b> Match for Brokers
-              </span>
-            </div>
-            <div className="floating-card card-two">
-              <ShieldCheck size={16} />
-              <span>Direct Customer Listings</span>
-            </div>
-          </div>
-        </section>
+          </section>
 
-        {/* Feature Hub Showcase Cards */}
-        <section className="portal-cards-section">
-          <div className="section-heading centered">
-            <span className="section-label">PLATFORM HUBS</span>
-            <h2>Choose Your Destination</h2>
-            <p>Everything you need to list properties, discover matching leads, or audit lease agreements.</p>
-          </div>
-
-          <div className="portals-trio-grid">
-            <div className="portal-card customer-card" onClick={onCustomer}>
-              <div className="portal-icon-wrapper customer-theme">
-                <Building size={26} />
-              </div>
-              <span className="portal-tag">PROPERTY OWNERS & SELLERS</span>
-              <h3>Customer Dashboard</h3>
-              <p>
-                List your property with all details: location, address, rent vs. sale, pricing, deposit, BHK, area, furnishing, amenities checklist, and owner contact. Manage listing status seamlessly.
-              </p>
-              <button className="portal-action-btn">
-                Open Customer Portal <ArrowRight size={16} />
-              </button>
-            </div>
-
-            <div className="portal-card broker-card" onClick={onBroker}>
-              <div className="portal-icon-wrapper broker-theme">
-                <Briefcase size={26} />
-              </div>
-              <span className="portal-tag">REAL ESTATE BROKERS & AGENTS</span>
-              <h3>Broker Dashboard</h3>
-              <p>
-                Enter what kind of property your client is looking for (purpose, city, locality, BHK, budget, furnishing) and RentWise <b>directly shows matching properties</b> with compatibility score meters and one-click proposal pitches.
-              </p>
-              <button className="portal-action-btn">
-                Open Broker Matcher <ArrowRight size={16} />
-              </button>
-            </div>
-
-            <div className="portal-card analyzer-card" onClick={onStart}>
-              <div className="portal-icon-wrapper analyzer-theme">
-                <FileText size={26} />
-              </div>
-              <span className="portal-tag">LEGAL & RENTAL SAFETY</span>
-              <h3>Agreement Analyzer</h3>
-              <p>
-                Upload any PDF or DOCX agreement to automatically extract rent, deposit, lock-in period, notice periods, detect unfair clauses, compute a fairness score, and ask questions.
-              </p>
-              <button className="portal-action-btn">
-                Analyze Agreement <ArrowRight size={16} />
-              </button>
-            </div>
-          </div>
-        </section>
-
-        <section className="value-row" id="features">
-          <Value icon={Building} title="Direct Owner Listings" text="Add property for rent or sale with complete specs." />
-          <Value icon={Sparkles} title="Direct Requirement Matching" text="Input customer preferences and see live matches." />
-          <Value icon={FileText} title="Upload your agreement" text="PDF or DOCX, up to 10 MB." />
-          <Value icon={ShieldCheck} title="Fairness & Risk Engine" text="Identify unfair terms and lock-ins before signing." />
-        </section>
-
-        <section className="how" id="how">
-          <div className="section-heading">
-            <span>HOW IT WORKS</span>
-            <h2>Empowering owners, brokers, and tenants in three steps.</h2>
-          </div>
-          <div className="steps">
-            <Step
-              n="01"
-              title="Customers List Properties"
-              text="Owners add properties for rent or sale with full specifications, location, pricing, and contact."
-              icon={Building}
+          <section className="auth-landing-card-wrap">
+            <AuthPanel
+              initialMode={initialMode}
+              targetRole={targetRole}
+              contextMessage={contextMessage}
+              onSuccess={onSuccess}
             />
-            <Step
-              n="02"
-              title="Brokers Match Clients"
-              text="Brokers input customer preferences and RentWise directly displays matching properties with compatibility scores."
-              icon={Sparkles}
-            />
-            <Step
-              n="03"
-              title="Review & Sign Safely"
-              text="Audit the lease or sale contract with RentWise AI analyzer to ensure complete safety."
-              icon={ShieldCheck}
-            />
-          </div>
-        </section>
-
-        <section className="future">
-          <div>
-            <span className="section-label">AVAILABLE TOOLS</span>
-            <h2>More clarity for real estate transactions.</h2>
-          </div>
-          <RoadmapFeatures />
-        </section>
+          </section>
+        </div>
       </main>
       <Footer />
     </>
   );
 }
 
-function AnalyzerPage({ initialLocation, onBack, onResult, error, setError }) {
+function AnalyzerPage({ initialLocation, token, user, onBack, onLoginToBrowse, onResult, error, setError }) {
   const [file, setFile] = useState(null);
   const [location, setLocation] = useState(initialLocation || "");
   const [busy, setBusy] = useState(false);
@@ -331,7 +610,7 @@ function AnalyzerPage({ initialLocation, onBack, onResult, error, setError }) {
     setBusy(true);
     setError("");
     try {
-      const data = await uploadAgreement(file, location);
+      const data = await uploadAgreement(file, location, token);
       onResult(data);
     } catch (e) {
       setError(e.message);
@@ -350,15 +629,30 @@ function AnalyzerPage({ initialLocation, onBack, onResult, error, setError }) {
       <main className="analyzer">
         <div className="analyzer-subnav">
           <button className="back-btn" onClick={onBack}>
-            <ArrowLeft size={16} /> Back to Home
+            <ArrowLeft size={16} /> {user ? "Back to Dashboard" : "Back to Login / Register"}
           </button>
         </div>
 
         <div className="product-heading">
           <span className="section-label">DOCUMENT ANALYZER</span>
           <h1>Analyze your rental agreement</h1>
-          <p>Upload your agreement and we'll highlight the details that matter.</p>
+          <p>Upload your PDF or DOCX agreement — no separate account required.</p>
         </div>
+
+        {!user && (
+          <div className="guest-login-link-banner">
+            <div className="guest-banner-copy">
+              <ShieldCheck size={18} />
+              <div>
+                <b>No account needed to analyze your file.</b>
+                <span> Want to buy or rent a property, or save this agreement to My Account?</span>
+              </div>
+            </div>
+            <button type="button" className="portal-role-switch-btn" onClick={onLoginToBrowse}>
+              <User size={14} /> User Login (Buy / Rent)
+            </button>
+          </div>
+        )}
 
         {busy ? (
           <div className="processing">
@@ -399,13 +693,17 @@ function AnalyzerPage({ initialLocation, onBack, onResult, error, setError }) {
                 Browse your files
                 <input type="file" accept=".pdf,.docx" onChange={choose} />
               </label>
-              <small>PDF or DOCX • Max 10 MB</small>
+              <small>PDF or DOCX</small>
             </div>
             <div className="upload-help">
               <ShieldCheck size={18} />
               <div>
                 <b>Private by design</b>
-                <span>Your document is processed only for this analysis.</span>
+                <span>
+                  {user
+                    ? "Signed in — this analysis will also be saved to My Account."
+                    : "Your document is processed only for this analysis."}
+                </span>
               </div>
             </div>
             <label className="location-field">
@@ -455,7 +753,7 @@ function AnalyzerPage({ initialLocation, onBack, onResult, error, setError }) {
   );
 }
 
-function ResultsPage({ result, onBack, onHome }) {
+function ResultsPage({ result, user, onBack, onHome, onCustomerDashboard, onLoginAndSave }) {
   const [active, setActive] = useState("Rent");
   const info = result?.information || {};
   const clause = (result?.clauses || []).find((c) => c.category === active);
@@ -481,6 +779,54 @@ function ResultsPage({ result, onBack, onHome }) {
             <Check size={17} />
           </div>
         </div>
+
+        {!user ? (
+          <div className="guest-next-step-card">
+            <div className="guest-next-step-copy">
+              <div className="guest-next-icon">
+                <Home size={20} />
+              </div>
+              <div>
+                <b>Ready to Buy or Rent a Home, or Save This Agreement?</b>
+                <p>
+                  Sign in with <b>User Login</b> to save this analysis to <b>My Account</b> and explore properties available to buy or rent.
+                </p>
+              </div>
+            </div>
+            <div className="guest-next-actions">
+              <button type="button" className="primary-btn compact" onClick={onLoginAndSave}>
+                <User size={15} /> User Login (Buy / Rent & Save)
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="guest-next-step-card logged-in">
+            <div className="guest-next-step-copy">
+              <div className="guest-next-icon">
+                <Check size={20} />
+              </div>
+              <div>
+                <b>Saved to Your RentWise Account</b>
+                <p>
+                  {result?.saved_to_account
+                    ? "This agreement has been added to My Account → Saved Agreements."
+                    : "Explore properties available to buy or rent, or open My Account."}
+                </p>
+              </div>
+            </div>
+            <div className="guest-next-actions">
+              <button type="button" className="filter-chip" onClick={() => onCustomerDashboard("buy")}>
+                <Tag size={14} /> Buy a Property
+              </button>
+              <button type="button" className="filter-chip" onClick={() => onCustomerDashboard("rent")}>
+                <Key size={14} /> Rent a Property
+              </button>
+              <button type="button" className="primary-btn compact" onClick={() => onCustomerDashboard("account")}>
+                <User size={14} /> My Account
+              </button>
+            </div>
+          </div>
+        )}
 
         {result?.scanned && (
           <div className="info-box">

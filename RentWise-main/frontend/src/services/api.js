@@ -1,12 +1,15 @@
 const API_BASE = import.meta.env.VITE_API_BASE || "/api";
 
-export async function uploadAgreement(file, location = "") {
+export async function uploadAgreement(file, location = "", token = "") {
   const form = new FormData();
   form.append("file", file);
   if (location.trim()) form.append("location", location.trim());
 
+  const headers = token ? { Authorization: `Bearer ${token}` } : {};
+
   const response = await fetch(`${API_BASE}/upload`, {
     method: "POST",
+    headers,
     body: form,
   });
 
@@ -151,5 +154,135 @@ export async function deleteBrokerLead(id) {
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(data.detail || "Failed to delete broker lead.");
+  return data;
+}
+
+export async function loginUser(credentials) {
+  const response = await fetch(`${API_BASE}/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(credentials),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data.detail || "Login failed. Please check your credentials.");
+  }
+  return data;
+}
+
+export async function signupUser(userData) {
+  const response = await fetch(`${API_BASE}/auth/signup`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(userData),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data.detail || "Registration failed. Please check the entered details.");
+  }
+  return data;
+}
+
+export async function getCurrentUser(token) {
+  if (!token) return null;
+  const response = await fetch(`${API_BASE}/auth/me`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!response.ok) return null;
+  const data = await response.json().catch(() => ({}));
+  return data.user || null;
+}
+
+export async function logoutUser(token) {
+  if (!token) return;
+  try {
+    await fetch(`${API_BASE}/auth/logout`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+  } catch {}
+}
+
+export async function getDemoAccounts() {
+  const response = await fetch(`${API_BASE}/auth/demo-accounts`);
+  if (!response.ok) return null;
+  return await response.json().catch(() => null);
+}
+
+export async function updateUserProfile(token, profileData) {
+  const response = await fetch(`${API_BASE}/auth/profile`, {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify(profileData),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.detail || "Failed to update profile.");
+  return data;
+}
+
+export async function getSavedProperties(token) {
+  if (!token) return { saved_ids: [], properties: [] };
+  const response = await fetch(`${API_BASE}/auth/saved-properties`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const data = await response.json().catch(() => ({ saved_ids: [], properties: [] }));
+  if (!response.ok) throw new Error(data.detail || "Failed to load saved properties.");
+  return data;
+}
+
+export async function savePropertyToAccount(token, propertyId) {
+  const response = await fetch(`${API_BASE}/auth/saved-properties/${encodeURIComponent(propertyId)}`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.detail || "Failed to save property.");
+  return data;
+}
+
+export async function removeSavedPropertyFromAccount(token, propertyId) {
+  const response = await fetch(`${API_BASE}/auth/saved-properties/${encodeURIComponent(propertyId)}`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.detail || "Failed to remove saved property.");
+  return data;
+}
+
+export async function getSavedAgreements(token) {
+  if (!token) return [];
+  const response = await fetch(`${API_BASE}/auth/agreements`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const data = await response.json().catch(() => ({ agreements: [] }));
+  if (!response.ok) throw new Error(data.detail || "Failed to load saved agreements.");
+  return data.agreements || [];
+}
+
+export async function saveAgreementToAccount(token, payload) {
+  const response = await fetch(`${API_BASE}/auth/agreements`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify(payload),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.detail || "Failed to save agreement.");
+  return data;
+}
+
+export async function deleteSavedAgreement(token, agreementId) {
+  const response = await fetch(`${API_BASE}/auth/agreements/${encodeURIComponent(agreementId)}`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.detail || "Failed to delete saved agreement.");
   return data;
 }

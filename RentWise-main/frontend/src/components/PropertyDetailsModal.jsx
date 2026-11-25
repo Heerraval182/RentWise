@@ -1,7 +1,7 @@
 import React from "react";
 import {
   X, MapPin, Home, Bed, Bath, Layers, Car, Calendar,
-  ShieldCheck, Phone, Mail, User, Sparkles, Check, FileText, ArrowRight
+  ShieldCheck, Phone, Mail, User, Sparkles, Check, FileText, ArrowRight, Bookmark
 } from "lucide-react";
 
 export function formatPrice(price, listingType) {
@@ -19,7 +19,13 @@ export function formatPrice(price, listingType) {
   return `₹${num.toLocaleString("en-IN")}`;
 }
 
-export default function PropertyDetailsModal({ property, onClose, onAnalyzeAgreement }) {
+export default function PropertyDetailsModal({
+  property,
+  onClose,
+  onAnalyzeAgreement,
+  isSaved = false,
+  onToggleSave,
+}) {
   if (!property) return null;
 
   const isRent = property.listing_type === "rent";
@@ -38,9 +44,21 @@ export default function PropertyDetailsModal({ property, onClose, onAnalyzeAgree
             </span>
             <span className="badge-pill type-pill">{property.property_type || "Apartment"}</span>
           </div>
-          <button className="modal-close-btn" onClick={onClose} aria-label="Close modal">
-            <X size={20} />
-          </button>
+          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+            {onToggleSave && (
+              <button
+                type="button"
+                className={`save-prop-pill-btn ${isSaved ? "saved" : ""}`}
+                onClick={() => onToggleSave(property.id)}
+              >
+                <Bookmark size={15} fill={isSaved ? "currentColor" : "none"} />
+                {isSaved ? "Saved" : "Save Property"}
+              </button>
+            )}
+            <button className="modal-close-btn" onClick={onClose} aria-label="Close modal">
+              <X size={20} />
+            </button>
+          </div>
         </div>
 
         <div className="modal-body">

@@ -32,6 +32,15 @@ Open the Vite URL shown in the terminal.
 
 The frontend calls `POST /api/upload`, `POST /api/ask`, and `GET /api/health`, as well as property management and broker matching endpoints (`/api/properties`, `/api/broker/match`, `/api/broker/leads`).
 
+### Authentication & User Roles
+
+RentWise includes role-based authentication for **Customers** and **Brokers**:
+- **Customer / Owner**: List properties, manage availability status, analyze agreements.
+- **Licensed Broker**: Access client lead matching, compatibility scores, and proposal pitch generation.
+- **1-Click Demo Logins** are built directly into the Auth Modal:
+  - **Demo Customer**: `customer@rentwise.com` / `password123` (Rahul Sharma)
+  - **Demo Broker**: `broker@rentwise.com` / `password123` (Amit Patel - Metro Prime Realty)
+
 ### Portals Overview
 
 - **Customer Dashboard (Property Owners & Sellers)**:
